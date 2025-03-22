@@ -1,0 +1,78 @@
+paths:
+  output_directory: ~/.amass_output
+  config_file: ~/.config/amass/config.yaml
+
+network_settings:
+  active: true
+  brute_forcing: true
+  dns_resolvers:
+    - 8.8.8.8
+    - 8.8.4.4
+    - 1.1.1.1
+    - 9.9.9.9
+    - 208.67.222.222
+    - 208.67.220.220
+    - 185.228.168.9
+    - 76.76.19.19
+  max_dns_queries: 500
+
+logging:
+  log_path: ~/.config/amass/amass.log
+  verbose: true
+  max_log_size: 10MB
+
+enum:
+  recursive: true
+  min_for_recursive: 2
+
+API:
+  active:
+    binaryedge:
+      - "API"
+    censys:
+      - username: "email"
+        password: "password"
+    certspotter:
+      - "API"
+    chaos:
+      - "API"
+    github:
+      - "API"
+    intelx:
+      - "API"
+    securitytrails:
+      - "API"
+    shodan:
+      - "API"
+    virustotal:
+      - "API"
+    zoomeye:
+      - "API"
+    hunter:
+      - "API"
+    fullhunt:
+      - "API"
+dns:
+  alt_names: true
+  wildcard_detection: true
+
+data_sources:
+  include:
+    - VirusTotal
+    - SecurityTrails
+    - Censys
+    - Shodan
+    - binaryedge
+    - certspotter
+    - chaos
+    - github
+    - zoomeye
+    - hunter
+    - fullhunt
+  exclude: []
+
+options:
+  wordlist:
+    - "/usr/share/amass/wordlists/deepmagic.com_top50kprefixes.txt"
+    - "/usr/share/amass/wordlists/deepmagic.com_top500prefixes.txt"
+    - "/usr/share/amass/wordlists/subdomains-top1mil-5000.txt"

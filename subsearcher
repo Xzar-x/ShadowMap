@@ -1,0 +1,313 @@
+#!/bin/bash
+
+# Colors
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+RED='\033[0;31m'
+YELLOW='\033[0;33m'
+NC='\033[0m' # No Color
+
+# Default configuration
+URL=""
+DOMAINS_FILE=""
+WORDLIST="/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt"
+THREADS=40
+TIMEOUT=30
+TOOLS=("FFUF Subdomain" "Gobuster Vhost" "Subfinder" "Amass")
+SELECTED=(1 1 1 1)
+
+# Amass options
+AMASS_PASSIVE=1
+AMASS_BRUTE=0
+AMASS_ACTIVE=0
+
+# ASCII Art
+print_title() {
+    echo -e "${GREEN}"
+    echo '   _____       _     _____                      _               '
+    echo '  / ___/__  __| |__ / ___/___  ____ ______  ___| |__  ___  ____ '
+    echo '  \__ \/ / / /|_| \/ \___ \/ _ \/ __ / ___/ / _ \|_ \/ _ \/ __/ '
+    echo ' ___/ / /_/ / |_) |___/ /  __/ /_/ / /  / /  __/ | | |  __/ /    '
+    echo '/____/\__,_/|_.__//____/\___/\__,_/_/  /_/\___|_| |_|\___/_/     '
+    echo -e "${NC}"
+    echo -e "${BLUE}SubSearcher${NC} - Automated Reconnaissance Toolkit        ${GREEN}by Xzar${NC}\n"
+}
+
+# Check dependencies
+check_dependencies() {
+    local missing=0
+    local tools=("ffuf" "gobuster" "subfinder" "amass" "httpx" "jq")
+    
+    echo -e "${BLUE}Checking dependencies...${NC}"
+    for tool in "${tools[@]}"; do
+        if ! command -v "$tool" &> /dev/null; then
+            echo -e "${RED}Missing: $tool${NC}"
+            missing=1
+        else
+            echo -e "${GREEN}Found: $tool${NC}"
+        fi
+    done
+    
+    if [ $missing -eq 1 ]; then
+        echo -e "\n${RED}Missing required tools. Please install them before continuing.${NC}"
+        exit 1
+    fi
+}
+
+# Main menu
+show_menu() {
+    while true; do
+        clear
+        print_title
+        echo -e "${YELLOW}Select tools:[1-4] toggle main tools, [a/s/d] toggle Amass options (if Amass is active), ENTER to continue${NC}"
+        for i in "${!TOOLS[@]}"; do
+            if [ ${SELECTED[i]} -eq 1 ]; then
+                echo -e "  ${GREEN}[$((i+1))] ✓ ${TOOLS[i]}${NC}"
+            else
+                echo -e "  ${RED}[$((i+1))] ✗ ${TOOLS[i]}${NC}"
+            fi
+            if [ $i -eq 3 ]; then
+                if [ ${SELECTED[3]} -eq 1 ]; then
+                    echo -e "      ${GREEN}[a] Passive: $( [ $AMASS_PASSIVE -eq 1 ] && echo -e "${GREEN}enabled" || echo -e "${RED}disabled" )"
+                    echo -e "      ${GREEN}[s] Brute:   $( [ $AMASS_BRUTE   -eq 1 ] && echo -e "${GREEN}enabled" || echo -e "${RED}disabled" )"
+                    echo -e "      ${GREEN}[d] Active:  $( [ $AMASS_ACTIVE  -eq 1 ] && echo -e "${GREEN}enabled" || echo -e "${RED}disabled" )"
+                else
+                    echo -e "      (Amass options disabled)"
+                fi
+            fi
+        done
+        echo -e "\n${BLUE}Current settings:${NC}"
+        [ -n "$URL" ] && echo -e "  Domain: ${GREEN}$URL${NC}"
+        [ -n "$DOMAINS_FILE" ] && echo -e "  Domains file: ${GREEN}$DOMAINS_FILE${NC}"
+        echo -e "  Wordlist: ${GREEN}$WORDLIST${NC}"
+        echo -e "  Threads: ${GREEN}$THREADS${NC}"
+        echo -e "  Timeout: ${GREEN}${TIMEOUT}s${NC}"
+        echo -e "\nPress 1-4 to toggle tools, a/s/d for Amass options, ENTER to start"
+
+        read -sn1 key
+        [[ -z "$key" ]] && break
+        
+        if [[ "$key" =~ [1-4] ]]; then
+            index=$((key-1))
+            SELECTED[$index]=$((1 - SELECTED[$index]))
+        elif [[ "$key" == "a" && ${SELECTED[3]} -eq 1 ]]; then
+            AMASS_PASSIVE=$((1 - AMASS_PASSIVE))
+        elif [[ "$key" == "s" && ${SELECTED[3]} -eq 1 ]]; then
+            AMASS_BRUTE=$((1 - AMASS_BRUTE))
+        elif [[ "$key" == "d" && ${SELECTED[3]} -eq 1 ]]; then
+            AMASS_ACTIVE=$((1 - AMASS_ACTIVE))
+        fi
+    done
+}
+
+# Domain validation
+is_valid_domain() {
+    local domain_regex='^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}(:[0-9]{1,5})?$'
+    [[ $1 =~ $domain_regex ]]
+}
+
+clean_domain() {
+    echo "$1" | sed -e 's|^[^/]*//||' -e 's|/.*$||' -e 's/^www\.//'
+}
+
+scan_domain() {
+    local domain=$1
+    echo -e "\n${BLUE}Scanning: ${GREEN}$domain${NC}"
+    
+    # Split domain and port
+    local domain_part=$(echo "$domain" | cut -d':' -f1)
+    local port_part=$(echo "$domain" | grep -q ':' && echo "$domain" | cut -d':' -f2 || echo "")
+    
+    # Temporary files
+    local ffuf_out="ffuf_$domain_part.txt"
+    local gobuster_out="gobuster_$domain_part.txt"
+    local subfinder_out="subfinder_$domain_part.txt"
+    local amass_out="amass_$domain_part.txt"
+    
+    local pids=()
+
+    # FFUF Subdomain
+    if [ ${SELECTED[0]} -eq 1 ]; then
+        (
+            echo -e "${BLUE}[+] FFUF Subdomain${NC}"
+            protocol="https://"
+            [ -n "$port_part" ] && protocol="http://"
+            ffuf -u "${protocol}FUZZ.$domain_part" -w "$WORDLIST" -ic -t $THREADS -o "$ffuf_out" -of json >/dev/null 2>&1
+            
+            # Poprawione przetwarzanie wyników ffuf
+            jq -r '.results[].url' "$ffuf_out" | sed 's|^http[s]*://||' | sort -u > "$ffuf_out.tmp"
+            if [ -n "$port_part" ]; then
+                sed "s/$/:$port_part/" "$ffuf_out.tmp" >> all_subdomains.txt
+            else
+                cat "$ffuf_out.tmp" >> all_subdomains.txt
+            fi
+            rm -f "$ffuf_out.tmp"
+        ) &
+        pids+=($!)
+    fi
+
+    # Gobuster Vhost
+if [ ${SELECTED[1]} -eq 1 ]; then
+    (
+        echo -e "${BLUE}[+] Gobuster Vhost${NC}"
+        
+        # Poprawione polecenie gobuster
+        #echo $domain
+        gobuster vhost -u "http://$domain" --append-domain -w "$WORDLIST" -t $THREADS -o "$gobuster_out" >/dev/null 2>&1
+        
+        # Poprawione przetwarzanie wyników gobuster z filtracją
+        grep "Found:" "$gobuster_out" | grep -i "status: 200" | cut -d' ' -f2 | sort -u > "vhost_status_200.txt"
+        grep "Found:" "$gobuster_out" | cut -d' ' -f2 | sort -u > "$gobuster_out.tmp"
+        
+        #if [ -n "$port_part" ]; then
+            # Jeśli port jest ustawiony, dodajemy port do każdej subdomeny
+         #   sed "s/$/:$port_part/" "$gobuster_out.tmp" >> all_subdomains.txt
+        #else
+            # Jeśli port nie jest ustawiony, zapisujemy tylko subdomeny
+            cat "$gobuster_out.tmp" >> all_subdomains.txt
+        #fi
+        rm -f "$gobuster_out.tmp"
+    ) &
+    pids+=($!)
+fi
+
+    # Subfinder
+    if [ ${SELECTED[2]} -eq 1 ]; then
+        (
+            echo -e "${BLUE}[+] Subfinder${NC}"
+            subfinder -d "$domain_part" -o "$subfinder_out" >/dev/null 2>&1
+            if [ -n "$port_part" ]; then
+                sed "s/$/:$port_part/" "$subfinder_out" >> all_subdomains.txt
+            else
+                cat "$subfinder_out" >> all_subdomains.txt
+            fi
+        ) &
+        pids+=($!)
+    fi
+
+# Amass
+if [ ${SELECTED[3]} -eq 1 ]; then
+    (
+        # Wyświetlenie Amass w nowej linii
+        echo -e "${BLUE}[+] Amass${NC}"
+        
+        amass_opts=()
+        
+        # Sprawdzenie, czy wybrano co najmniej jedną opcję dla Amass
+        if [ $AMASS_PASSIVE -eq 0 ] && [ $AMASS_BRUTE -eq 0 ] && [ $AMASS_ACTIVE -eq 0 ]; then
+            AMASS_PASSIVE=1  # Domyślnie włącz tryb pasywny, jeśli nic nie wybrano
+        fi
+        
+        [ $AMASS_PASSIVE -eq 1 ] && amass_opts+=("-passive")
+        [ $AMASS_BRUTE -eq 1 ] && amass_opts+=("-brute")
+        [ $AMASS_ACTIVE -eq 1 ] && amass_opts+=("-active")
+        
+        # Poprawiony format parametru timeout
+        amass enum "${amass_opts[@]}" -d "$domain_part" -o "$amass_out" >/dev/null 2>&1
+        
+        # Filtracja wyników
+        cat "$amass_out" | sed 's/\x1b\[[0-9;]*m//g' | grep -Eo "([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}" | sort -u | grep -E "^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,6}$" > "$amass_out.tmp"
+        
+        # Przetwarzanie wyników z dodaniem portu
+        if [ -n "$port_part" ]; then
+            sed "s/$/:$port_part/" "$amass_out.tmp" >> all_subdomains.txt
+        else
+            cat "$amass_out.tmp" >> all_subdomains.txt
+        fi
+        
+        # Usunięcie tymczasowego pliku
+        rm -f "$amass_out.tmp"
+    ) &
+    pids+=($!)
+fi
+    sleep 0.1
+# Progress
+local spin='-\|/'
+local i=0
+while kill -0 "${pids[@]}" 2>/dev/null; do
+    i=$(( (i+1) %4 ))
+    # Przeniesienie komunikatu Scanning... na nową linię
+    echo -ne "\r${YELLOW}${spin:$i:1} Scanning...${NC}"
+    sleep 0.1
+done
+
+# Po zakończeniu skanowania, informacja o zakończeniu skanu
+echo -ne "\r${GREEN}✓ Scan completed!${NC}\n"
+
+# Cleanup
+rm -f "$ffuf_out" "$gobuster_out" "$subfinder_out" "$amass_out"
+}
+
+main() {
+    while getopts "u:f:w:t:T:h" opt; do
+        case $opt in
+            u) URL=$(clean_domain "$OPTARG") ;;
+            f) DOMAINS_FILE="$OPTARG" ;;
+            w) WORDLIST="$OPTARG" ;;
+            t) THREADS="$OPTARG" ;;
+            T) TIMEOUT="$OPTARG" ;;
+            h) 
+                echo "Usage: $0 [-u URL] [-f FILE] [-w WORDLIST] [-t THREADS] [-T TIMEOUT]"
+                exit 0
+                ;;
+            *) exit 1 ;;
+        esac
+    done
+
+    # Validation
+    [ -z "$URL" ] && [ -z "$DOMAINS_FILE" ] && { echo -e "${RED}Error: Provide domain (-u) or domains file (-f)${NC}"; exit 1; }
+    [ -n "$DOMAINS_FILE" ] && [ ! -f "$DOMAINS_FILE" ] && { echo -e "${RED}Error: File not found${NC}"; exit 1; }
+
+    check_dependencies
+    show_menu
+
+    # Prepare files
+    rm -f all_subdomains.txt live_subdomains.txt report.md
+    touch all_subdomains.txt
+
+    # Process targets
+    if [ -n "$DOMAINS_FILE" ]; then
+        while IFS= read -r domain || [ -n "$domain" ]; do
+            domain=$(clean_domain "$domain")
+            is_valid_domain "$domain" && scan_domain "$domain"
+        done < "$DOMAINS_FILE"
+    else
+        scan_domain "$URL"
+    fi
+
+    # Final processing
+    sort -u all_subdomains.txt -o all_subdomains.txt
+    echo -e "\n${BLUE}Unique subdomains: ${GREEN}$(wc -l < all_subdomains.txt)${NC}"
+    echo -e "${BLUE}Vhosts with status code 200: ${GREEN}$(wc -l < vhost_status_200.txt)${NC}"
+    # Live check
+    echo -e "${BLUE}Checking live hosts...${NC}"
+    httpx -l all_subdomains.txt -silent -threads $THREADS -timeout $TIMEOUT -o live_subdomains.txt > /dev/null 2>&1
+    echo -e "${GREEN}Live hosts: $(wc -l < live_subdomains.txt)${NC}"
+
+    # Generate report
+    {
+        echo "# Subdomain Report"
+        echo "**Date**: $(date)"
+        echo "**Target(s)**: ${URL:-$DOMAINS_FILE}"
+        echo "**Tools used**:"
+        [ ${SELECTED[0]} -eq 1 ] && echo "- FFUF"
+        [ ${SELECTED[1]} -eq 1 ] && echo "- Gobuster"
+        [ ${SELECTED[2]} -eq 1 ] && echo "- Subfinder"
+        [ ${SELECTED[3]} -eq 1 ] && echo "- Amass"
+        echo "## Results"
+        echo "### All Subdomains"
+        cat all_subdomains.txt | wc -l
+        echo "### Live Hosts"
+        cat live_subdomains.txt | wc -l
+        echo "### Vhosts with status 200"
+        cat vhost_status_200.txt | wc -l
+    } > report.md
+
+    echo -e "\n${GREEN}Report saved: report.md${NC}"
+    echo -e "${BLUE}Results:${NC}"
+    echo -e "• All subdomains: all_subdomains.txt"
+    echo -e "• Live hosts: live_subdomains.txt"
+    echo -e "• Vhosts: vhost_status_200.txt"
+}
+
+main "$@"

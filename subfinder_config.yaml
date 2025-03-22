@@ -1,0 +1,80 @@
+# Subfinder - Konfiguracja
+# Zapisz ten plik jako ~/.config/subfinder/config.yaml
+
+# Podstawowe ustawienia
+resolvers:
+  - 1.1.1.1
+  - 1.0.0.1
+  - 8.8.8.8
+  - 8.8.4.4
+  - 9.9.9.9
+  - 149.112.112.112
+  - 208.67.222.222
+  - 208.67.220.220
+  
+sources:
+  - alienvault
+  - anubis
+  - bufferover
+  - certspotter
+  - censys
+  - chaos
+  - crtsh
+  - dnsdumpster
+  - hackertarget
+  - intelx
+  - passivetotal
+  - robtex
+  - riddler
+  - securitytrails
+  - shodan
+  - spyse
+  - sublist3r
+  - threatcrowd
+  - threatminer
+  - virustotal
+
+# Limity i timeout
+threads: 10
+timeout: 30
+max-time: 10
+rate-limit: 0
+rate-limit-minute: 0
+
+# Wyjście i filtry
+recursive: false
+all: false
+silent: false
+
+# API klucze (uzupełnij swoimi kluczami)
+binaryedge:
+  - "API"
+censys:
+  - username: "EMAIL"
+    password: "PASSWORD"
+certspotter:
+  - "API"
+chaos:
+  - "API"
+github:
+  - "API"
+intelx:
+  - "API"
+securitytrails:
+  - "API"
+shodan:
+  - "API"
+virustotal:
+  - "API"
+zoomeye:
+  - "API"
+hunter:
+  - "API"
+fullhunt:
+  - "API"
+
+# Opcjonalne ustawienia dodatkowe
+exclude-sources: []
+include-sources: []
+exclude-resolvers: []
+include-resolvers: []
