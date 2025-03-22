@@ -193,7 +193,7 @@ scan_domain() {
             [ $AMASS_BRUTE -eq 1 ] && amass_opts+=("-brute")
             [ $AMASS_ACTIVE -eq 1 ] && amass_opts+=("-active")
             
-            if ! amass enum "${amass_opts[@]}" -d "$domain_part" -o "$amass_out" --config "$HOME/.config/amass/config.yaml" > &>/dev/null; then
+            if ! amass enum "${amass_opts[@]}" -d "$domain_part" -o "$amass_out" --config "$HOME/.config/amass/config.yaml" & > /dev/null; then
                 echo "Błąd podczas uruchamiania Amass!"
             fi
             # Filtracja wyników
