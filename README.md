@@ -47,4 +47,4 @@ Here’s an example output of Subsearcher:
 This project is licensed under the MIT License.
 
 ---
-✨ *Created with ❤️ by Xzar* ✨
+✨ *Created by Xzar* ✨
