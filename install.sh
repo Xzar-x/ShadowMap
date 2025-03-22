@@ -42,41 +42,37 @@ if [ ${#missing_tools[@]} -ne 0 ]; then
             echo "Failed to update package list. Please check your network connection or package sources."
             exit 1
         fi
+        # Instalowanie brakujących narzędzi
         for tool in "${missing_tools[@]}"; do
             case "$tool" in
                 ffuf)
                     echo "Installing ffuf..."
                     if ! sudo apt install ffuf -y; then
                         echo "Failed to install ffuf."
-                        exit 1
                     fi
                     ;;
                 gobuster)
                     echo "Installing gobuster..."
                     if ! sudo apt install gobuster -y; then
                         echo "Failed to install gobuster."
-                        exit 1
                     fi
                     ;;
                 amass)
                     echo "Installing amass..."
                     if ! sudo apt install amass -y; then
                         echo "Failed to install amass."
-                        exit 1
                     fi
                     ;;
                 jq)
                     echo "Installing jq..."
                     if ! sudo apt install jq -y; then
                         echo "Failed to install jq."
-                        exit 1
                     fi
                     ;;
                 subfinder)
                     echo "Installing subfinder..."
                     if ! sudo apt install subfinder -y; then
                         echo "Failed to install subfinder."
-                        exit 1
                     fi
                     ;;
                 *)
@@ -158,6 +154,5 @@ else
     fi
     echo "Subfinder config installed in $subfinder_config_dest."
 fi
-sudo rm -r ../subsearcher
 echo -e "\nSubsearcher has been successfully installed!"
 echo "Remember to update your API keys in the config files of subfinder in $user_home/.config/subfinder/config.yaml and amass in $user_home/.config/amass/config.yaml."
