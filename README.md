@@ -1,6 +1,6 @@
-# 🚀 Subsearcher Installer
+# 🚀 Subsearcher
 
-A powerful and automated script to install **Subsearcher** and its dependencies for subdomain enumeration.
+SubSearcher is a tool that combines several powerful subdomain enumeration scripts, running them simultaneously in the background, significantly speeding up subdomain reconnaissance.
 
 ## 📥 Installation
 To install Subsearcher, run the following commands:
