@@ -41,7 +41,8 @@ The script will check for these tools and install them if missing.
 
 ## 🖼️ Screenshots
 Here’s an example output of Subsearcher:
-![Subsearcher Output](images/screenshot.png)
+![SubSearcher](https://github.com/Xzar-x/images/raw/main/subsearcher.png)
+
 
 ## 📄 License
 This project is licensed under the MIT License.
