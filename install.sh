@@ -73,10 +73,11 @@ if [ ${#missing_tools[@]} -ne 0 ]; then
                     fi
                     ;;
                 subfinder)
-                    echo "Subfinder cannot be installed automatically."
-                    echo "To install subfinder, run the following command:"
-                    echo "go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest"
-                    echo "or download the binary from https://github.com/projectdiscovery/subfinder"
+                    echo "Installing subfinder..."
+                    if ! sudo apt install subfinder -y; then
+                        echo "Failed to install subfinder."
+                        exit 1
+                    fi
                     ;;
                 *)
                     echo "Unknown tool: $tool"
@@ -97,7 +98,7 @@ fi
 
 install_dir="/usr/local/bin"
 echo -e "\nInstalling 'subsearcher' to: $install_dir (sudo privileges required)"
-if ! sudo cp subsearcher "$install_dir/"; then
+if ! sudo mv subsearcher "$install_dir/"; then
     echo "Failed to copy subsearcher to $install_dir."
     exit 1
 fi
@@ -157,6 +158,6 @@ else
     fi
     echo "Subfinder config installed in $subfinder_config_dest."
 fi
-
+sudo rm -r ../subsearcher
 echo -e "\nSubsearcher has been successfully installed!"
 echo "Remember to update your API keys in the config files of subfinder in $user_home/.config/subfinder/config.yaml and amass in $user_home/.config/amass/config.yaml."
