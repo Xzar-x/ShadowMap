@@ -13,7 +13,7 @@ DOMAINS_FILE=""
 WORDLIST="/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt"
 THREADS=40
 TIMEOUT=30
-TOOLS=("FFUF Subdomain" "Gobuster Vhost" "Subfinder" "Amass")
+TOOLS=("FFUF Subdomain" "Gobuster Vhost" "Subfinder" "Amass (long search)")
 SELECTED=(1 1 1 1)
 
 # Amass options
@@ -193,7 +193,7 @@ scan_domain() {
             [ $AMASS_BRUTE -eq 1 ] && amass_opts+=("-brute")
             [ $AMASS_ACTIVE -eq 1 ] && amass_opts+=("-active")
             
-            if ! amass enum "${amass_opts[@]}" -d "$domain_part" -o "$amass_out" --config "$HOME/.config/amass/config.yaml"; then
+            if ! amass enum "${amass_opts[@]}" -d "$domain_part" -o "$amass_out" --config "$HOME/.config/amass/config.yaml" > /dev/null 2>&1; then
                 echo "Błąd podczas uruchamiania Amass!"
             fi
             # Filtracja wyników
