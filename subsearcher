@@ -134,7 +134,7 @@ scan_domain() {
             [ -n "$port_part" ] && protocol="http://"
             ffuf -u "${protocol}FUZZ.$domain_part" -w "$WORDLIST" -ic -t $THREADS -o "$ffuf_out" -of json >/dev/null 2>&1
             
-            # Poprawione przetwarzanie wyników ffuf
+            # Przetwarzanie wyników ffuf
             jq -r '.results[].url' "$ffuf_out" | sed 's|^http[s]*://||' | sort -u > "$ffuf_out.tmp"
             if [ -n "$port_part" ]; then
                 sed "s/$/:$port_part/" "$ffuf_out.tmp" >> all_subdomains.txt
@@ -147,29 +147,21 @@ scan_domain() {
     fi
 
     # Gobuster Vhost
-if [ ${SELECTED[1]} -eq 1 ]; then
-    (
-        echo -e "${BLUE}[+] Gobuster Vhost${NC}"
-        
-        # Poprawione polecenie gobuster
-        #echo $domain
-        gobuster vhost -u "http://$domain" --append-domain -w "$WORDLIST" -t $THREADS -o "$gobuster_out" >/dev/null 2>&1
-        
-        # Poprawione przetwarzanie wyników gobuster z filtracją
-        grep "Found:" "$gobuster_out" | grep -i "status: 200" | cut -d' ' -f2 | sort -u > "vhost_status_200.txt"
-        grep "Found:" "$gobuster_out" | cut -d' ' -f2 | sort -u > "$gobuster_out.tmp"
-        
-        #if [ -n "$port_part" ]; then
-            # Jeśli port jest ustawiony, dodajemy port do każdej subdomeny
-         #   sed "s/$/:$port_part/" "$gobuster_out.tmp" >> all_subdomains.txt
-        #else
-            # Jeśli port nie jest ustawiony, zapisujemy tylko subdomeny
+    if [ ${SELECTED[1]} -eq 1 ]; then
+        (
+            echo -e "${BLUE}[+] Gobuster Vhost${NC}"
+            
+            gobuster vhost -u "http://$domain" --append-domain -w "$WORDLIST" -t $THREADS -o "$gobuster_out"  >/dev/null 2>&1
+            
+            # Przetwarzanie wyników gobuster z filtrowaniem statusu 200
+            grep "Found:" "$gobuster_out" | grep -i "status: 200" | cut -d' ' -f2 | sort -u > "vhost_status_200.txt"
+            grep "Found:" "$gobuster_out" | cut -d' ' -f2 | sort -u > "$gobuster_out.tmp"
+            
             cat "$gobuster_out.tmp" >> all_subdomains.txt
-        #fi
-        rm -f "$gobuster_out.tmp"
-    ) &
-    pids+=($!)
-fi
+            rm -f "$gobuster_out.tmp"
+        ) &
+        pids+=($!)
+    fi
 
     # Subfinder
     if [ ${SELECTED[2]} -eq 1 ]; then
@@ -185,57 +177,53 @@ fi
         pids+=($!)
     fi
 
-# Amass
-if [ ${SELECTED[3]} -eq 1 ]; then
-    (
-        # Wyświetlenie Amass w nowej linii
-        echo -e "${BLUE}[+] Amass${NC}"
-        
-        amass_opts=()
-        
-        # Sprawdzenie, czy wybrano co najmniej jedną opcję dla Amass
-        if [ $AMASS_PASSIVE -eq 0 ] && [ $AMASS_BRUTE -eq 0 ] && [ $AMASS_ACTIVE -eq 0 ]; then
-            AMASS_PASSIVE=1  # Domyślnie włącz tryb pasywny, jeśli nic nie wybrano
-        fi
-        
-        [ $AMASS_PASSIVE -eq 1 ] && amass_opts+=("-passive")
-        [ $AMASS_BRUTE -eq 1 ] && amass_opts+=("-brute")
-        [ $AMASS_ACTIVE -eq 1 ] && amass_opts+=("-active")
-        
-        # Poprawiony format parametru timeout
-        amass enum "${amass_opts[@]}" -d "$domain_part" -o "$amass_out" >/dev/null 2>&1
-        
-        # Filtracja wyników
-        cat "$amass_out" | sed 's/\x1b\[[0-9;]*m//g' | grep -Eo "([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}" | sort -u | grep -E "^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,6}$" > "$amass_out.tmp"
-        
-        # Przetwarzanie wyników z dodaniem portu
-        if [ -n "$port_part" ]; then
-            sed "s/$/:$port_part/" "$amass_out.tmp" >> all_subdomains.txt
-        else
-            cat "$amass_out.tmp" >> all_subdomains.txt
-        fi
-        
-        # Usunięcie tymczasowego pliku
-        rm -f "$amass_out.tmp"
-    ) &
-    pids+=($!)
-fi
-    sleep 0.1
-# Progress
-local spin='-\|/'
-local i=0
-while kill -0 "${pids[@]}" 2>/dev/null; do
-    i=$(( (i+1) %4 ))
-    # Przeniesienie komunikatu Scanning... na nową linię
-    echo -ne "\r${YELLOW}${spin:$i:1} Scanning...${NC}"
-    sleep 0.1
-done
+    # Amass
+    if [ ${SELECTED[3]} -eq 1 ]; then
+        (
+            echo -e "${BLUE}[+] Amass${NC}"
+            
+            amass_opts=()
+            
+            # Jeśli żadna opcja nie została wybrana, domyślnie włącz tryb pasywny
+            if [ $AMASS_PASSIVE -eq 0 ] && [ $AMASS_BRUTE -eq 0 ] && [ $AMASS_ACTIVE -eq 0 ]; then
+                AMASS_PASSIVE=1
+            fi
+            
+            [ $AMASS_PASSIVE -eq 1 ] && amass_opts+=("-passive")
+            [ $AMASS_BRUTE -eq 1 ] && amass_opts+=("-brute")
+            [ $AMASS_ACTIVE -eq 1 ] && amass_opts+=("-active")
+            
+            if ! amass enum "${amass_opts[@]}" -d "$domain_part" -o "$amass_out" --config "$HOME/.config/amass/config.yaml"; then
+                echo "Błąd podczas uruchamiania Amass!"
+            fi
+            # Filtracja wyników
+            cat "$amass_out" | sed 's/\x1b\[[0-9;]*m//g' | grep -Eo "([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}" | sort -u | grep -E "^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,6}$" > "$amass_out.tmp"
+            
+            if [ -n "$port_part" ]; then
+                sed "s/$/:$port_part/" "$amass_out.tmp" >> all_subdomains.txt
+            else
+                cat "$amass_out.tmp" >> all_subdomains.txt
+            fi
+            
+            rm -f "$amass_out.tmp"
+        ) &
+        pids+=($!)
+    fi
 
-# Po zakończeniu skanowania, informacja o zakończeniu skanu
-echo -ne "\r${GREEN}✓ Scan completed!${NC}\n"
+    sleep 0.1
+    # Progress indicator
+    local spin='-\|/'
+    local i=0
+    while kill -0 "${pids[@]}" 2>/dev/null; do
+        i=$(( (i+1) % 4 ))
+        echo -ne "\r${YELLOW}${spin:$i:1} Scanning...${NC}"
+        sleep 0.1
+    done
 
-# Cleanup
-rm -f "$ffuf_out" "$gobuster_out" "$subfinder_out" "$amass_out"
+    echo -ne "\r${GREEN}✓ Scan completed!${NC}\n"
+
+    # Cleanup temporary files
+    rm -f "$ffuf_out" "$gobuster_out" "$subfinder_out" "$amass_out"
 }
 
 main() {
@@ -254,18 +242,18 @@ main() {
         esac
     done
 
-    # Validation
+    # Walidacja
     [ -z "$URL" ] && [ -z "$DOMAINS_FILE" ] && { echo -e "${RED}Error: Provide domain (-u) or domains file (-f)${NC}"; exit 1; }
     [ -n "$DOMAINS_FILE" ] && [ ! -f "$DOMAINS_FILE" ] && { echo -e "${RED}Error: File not found${NC}"; exit 1; }
 
     check_dependencies
     show_menu
 
-    # Prepare files
+    # Przygotowanie plików
     rm -f all_subdomains.txt live_subdomains.txt report.md
     touch all_subdomains.txt
 
-    # Process targets
+    # Przetwarzanie celów
     if [ -n "$DOMAINS_FILE" ]; then
         while IFS= read -r domain || [ -n "$domain" ]; do
             domain=$(clean_domain "$domain")
@@ -275,16 +263,17 @@ main() {
         scan_domain "$URL"
     fi
 
-    # Final processing
+    # Finalne przetwarzanie
     sort -u all_subdomains.txt -o all_subdomains.txt
     echo -e "\n${BLUE}Unique subdomains: ${GREEN}$(wc -l < all_subdomains.txt)${NC}"
-    echo -e "${BLUE}Vhosts with status code 200: ${GREEN}$(wc -l < vhost_status_200.txt)${NC}"
-    # Live check
+    if [ ${SELECTED[1]} -eq 1 ]; then
+        echo -e "${BLUE}Vhosts with status code 200: ${GREEN}$(wc -l < vhost_status_200.txt)${NC}"
+    fi
     echo -e "${BLUE}Checking live hosts...${NC}"
     httpx -l all_subdomains.txt -silent -threads $THREADS -timeout $TIMEOUT -o live_subdomains.txt > /dev/null 2>&1
     echo -e "${GREEN}Live hosts: $(wc -l < live_subdomains.txt)${NC}"
 
-    # Generate report
+    # Generowanie raportu
     {
         echo "# Subdomain Report"
         echo "**Date**: $(date)"
@@ -299,15 +288,19 @@ main() {
         cat all_subdomains.txt | wc -l
         echo "### Live Hosts"
         cat live_subdomains.txt | wc -l
-        echo "### Vhosts with status 200"
-        cat vhost_status_200.txt | wc -l
+        if [ ${SELECTED[1]} -eq 1 ]; then
+            echo "### Vhosts with status 200"
+            cat vhost_status_200.txt | wc -l
+        fi
     } > report.md
 
     echo -e "\n${GREEN}Report saved: report.md${NC}"
     echo -e "${BLUE}Results:${NC}"
     echo -e "• All subdomains: all_subdomains.txt"
     echo -e "• Live hosts: live_subdomains.txt"
-    echo -e "• Vhosts: vhost_status_200.txt"
+    if [ ${SELECTED[1]} -eq 1 ]; then
+        echo -e "• Vhosts: vhost_status_200.txt"
+    fi
 }
 
 main "$@"
