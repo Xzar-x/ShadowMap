@@ -1,4 +1,8 @@
 #!/bin/bash
+
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
 set -e
 
 # Function to check if a tool is installed
@@ -17,7 +21,7 @@ echo "Checking required tools..."
 
 for tool in "${TOOLS[@]}"; do
     if ! check_tool "$tool"; then
-        echo "Missing tool: $tool"
+        echo -e "${RED}Missing tool: $tool${NC}"
         missing_tools+=("$tool")
     else
         echo "Found: $tool"
@@ -154,5 +158,6 @@ else
     fi
     echo "Subfinder config installed in $subfinder_config_dest."
 fi
-echo -e "\nSubsearcher has been successfully installed!"
-echo "Remember to update your API keys in the config files of subfinder in $user_home/.config/subfinder/config.yaml and amass in $user_home/.config/amass/config.yaml."
+echo -e "\n${GREEN}Subsearcher has been successfully installed!${NC}"
+echo -e "${RED}Remember to update your API keys in the config files of subfinder in $user_home/.config/subfinder/config.yaml and amass in $user_home/.config/amass/config.yaml.${NC}"
+
