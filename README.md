@@ -8,7 +8,7 @@ To install Subsearcher, run the following commands:
 git clone https://github.com/Xzar-x/SubSearcher.git
 cd SubSearcher
 chmod +x install.sh
-sudo ./install.sh
+./install.sh
 ```
 
 ## 🔧 Usage
