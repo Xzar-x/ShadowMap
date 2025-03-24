@@ -24,7 +24,7 @@ for tool in "${TOOLS[@]}"; do
         echo -e "${RED}Missing tool: $tool${NC}"
         missing_tools+=("$tool")
     else
-        echo "Found: $tool"
+        echo "Found: ${GREEN}$tool"
     fi
 done
 
