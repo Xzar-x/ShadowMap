@@ -3,8 +3,6 @@ paths:
   config_file: ~/.config/amass/config.yaml
 
 network_settings:
-  active: true
-  brute_forcing: true
   dns_resolvers:
     - 8.8.8.8
     - 8.8.4.4
