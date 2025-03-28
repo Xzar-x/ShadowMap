@@ -2,9 +2,9 @@ paths:
   output_directory: ~/.amass_output
   config_file: ~/.config/amass/config.yaml
 
-network_settings:
-  dns_resolvers:
-    - 8.8.8.8
+network:                   
+  resolvers:             
+    - 8.8.8.8            
     - 8.8.4.4
     - 1.1.1.1
     - 9.9.9.9
@@ -12,7 +12,7 @@ network_settings:
     - 208.67.220.220
     - 185.228.168.9
     - 76.76.19.19
-  max_dns_queries: 500
+  max_dns_queries: 500    
 
 logging:
   log_path: ~/.config/amass/amass.log
@@ -23,7 +23,7 @@ enum:
   recursive: true
   min_for_recursive: 2
 
-API:
+api:
   active:
     binaryedge:
       - "API"
@@ -56,10 +56,10 @@ dns:
 
 data_sources:
   include:
-    - VirusTotal
-    - SecurityTrails
-    - Censys
-    - Shodan
+    - virusTotal
+    - securityTrails
+    - censys
+    - shodan
     - binaryedge
     - certspotter
     - chaos
