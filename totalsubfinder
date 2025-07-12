@@ -14,6 +14,15 @@ WORDLIST="/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt"
 THREADS=40
 TIMEOUT=30
 
+# Nowe globalne zmienne dla limitowania zapytań i trybu stealth
+RATE_LIMIT_MODE="MEDIUM" # Domyślny tryb limitowania zapytań
+CUSTOM_RATE_LIMIT=""    # Jeśli użytkownik poda konkretną liczbę
+STEALTH_MODE=0          # 0 = wyłączony, 1 = włączony
+
+# Domyślne opóźnienie i User-Agent dla trybu stealth
+DEFAULT_DELAY=1         # Domyślne opóźnienie w sekundach
+DEFAULT_RANDOM_UA=1     # 1 = używaj losowego User-Agenta
+
 # Zdefiniowanie narzędzi i ich nazw do wyświetlania w menu
 TOOLS=(
     "FFUF Subdomain"
@@ -52,6 +61,7 @@ TMPDIR=""
 amass_opts_str=""
 
 # Deklaracja tablicy asocjacyjnej dla komend narzędzi
+# Komendy będą modyfikowane w zależności od trybu limitowania zapytań
 declare -A TOOL_CMDS=(
   ["FFUF Subdomain"]="ffuf -u 'https://FUZZ.\$domain_part' -w '\$WORDLIST' -ic -t \$THREADS" # Komenda bazowa, protokół będzie zmieniany dynamicznie
   ["Gobuster Vhost"]="gobuster vhost -u 'http://\$domain' --append-domain -w '\$WORDLIST' -t \$THREADS"
@@ -68,6 +78,159 @@ declare -A TOOL_CMDS=(
 strip_ansi_codes() {
     echo "$1" | sed 's/\x1b\[[0-9;]*m//g'
 }
+
+# Funkcja do ustawiania opcji limitowania zapytań dla narzędzi
+apply_rate_limit_options() {
+    local tool_name="$1"
+    local base_cmd="${TOOL_CMDS[$tool_name]}"
+    local modified_cmd="$base_cmd"
+    local delay_opt=""
+    local user_agent_opt=""
+
+    # Losowy User-Agent, jeśli włączony tryb stealth
+    if [ "$STEALTH_MODE" -eq 1 ] || [ "$DEFAULT_RANDOM_UA" -eq 1 ]; then
+        # Lista popularnych User-Agentów
+        local user_agents=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/103.0.0.0 Safari/537.36"
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/103.0.0.0 Safari/537.36"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:102.0) Gecko/20100101 Firefox/102.0"
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:102.0) Gecko/20100101 Firefox/102.0"
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/103.0.0.0 Safari/537.36"
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 15_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.5 Mobile/15E148 Safari/604.1"
+            "Mozilla/5.0 (iPad; CPU OS 15_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.5 Mobile/15E148 Safari/604.1"
+        )
+        user_agent_opt="-H \"User-Agent: ${user_agents[$RANDOM % ${#user_agents[@]}]}\""
+    fi
+
+    local current_threads="$THREADS"
+    local current_delay=0
+
+    # Ustawianie limitów w zależności od trybu
+    case "$RATE_LIMIT_MODE" in
+        "LOW")
+            current_threads=5 # Bardzo niskie wątki
+            current_delay=$DEFAULT_DELAY # Domyślne opóźnienie
+            ;;
+        "MEDIUM")
+            current_threads=20 # Średnie wątki
+            current_delay=0.5 # Mniejsze opóźnienie
+            ;;
+        "HIGH")
+            current_threads=40 # Wysokie wątki (domyślne)
+            current_delay=0 # Brak opóźnienia
+            ;;
+        *) # Niestandardowa liczba wątków
+            if [[ "$CUSTOM_RATE_LIMIT" =~ ^[0-9]+$ ]]; then
+                current_threads="$CUSTOM_RATE_LIMIT"
+                current_delay=0 # Brak opóźnienia przy niestandardowym limicie (zakładamy, że użytkownik wie, co robi)
+            fi
+            ;;
+    esac
+
+    # Nadpisanie ustawień, jeśli włączony tryb stealth
+    if [ "$STEALTH_MODE" -eq 1 ]; then
+        current_threads=1 # Bardzo niska liczba wątków
+        current_delay=2   # Większe opóźnienie
+    fi
+
+    # Dodawanie opcji do komend narzędzi
+    case "$tool_name" in
+        "FFUF Subdomain")
+            modified_cmd=$(echo "$base_cmd" | sed "s/-t \$THREADS/-t $current_threads/g")
+            if [ "$current_delay" -gt 0 ]; then
+                modified_cmd+=" -delay ${current_delay}s"
+            fi
+            if [ -n "$user_agent_opt" ]; then
+                modified_cmd+=" $user_agent_opt"
+            fi
+            ;;
+        "Gobuster Vhost")
+            modified_cmd=$(echo "$base_cmd" | sed "s/-t \$THREADS/-t $current_threads/g")
+            if [ "$current_delay" -gt 0 ]; then
+                modified_cmd+=" -d ${current_delay}s" # Gobuster używa -d dla opóźnienia
+            fi
+            if [ -n "$user_agent_opt" ]; then
+                modified_cmd+=" -H \"User-Agent: $(echo "$user_agent_opt" | sed 's/-H "User-Agent: //;s/"$//')\""
+            fi
+            ;;
+        "Subfinder")
+            # Subfinder ma wbudowane mechanizmy, ale możemy ograniczyć liczbę wątków
+            modified_cmd=$(echo "$base_cmd" | sed "s/-silent/-silent -t $current_threads/g")
+            # Subfinder nie ma bezpośredniej opcji opóźnienia per zapytanie, ale można użyć -rl dla ogólnego limitu
+            # Nie dodajemy -rl tutaj, aby nie kolidować z jego wewnętrzną logiką, chyba że jest to konieczne
+            # Jeśli potrzebne, można dodać: modified_cmd+=" -rl $current_threads"
+            if [ -n "$user_agent_opt" ]; then
+                # Subfinder nie ma bezpośredniej flagi UA, ale można ją dodać do jego konfiguracji lub użyć proxy
+                # Na potrzeby tego skryptu, pomijamy UA dla subfindera, chyba że jest to kluczowe
+                true # Brak bezpośredniego wsparcia UA w CLI dla subfindera
+            fi
+            ;;
+        "Amass (long scan)")
+            # Amass ma własne mechanizmy limitowania i User-Agentów w pliku konfiguracyjnym
+            # Tutaj możemy ewentualnie ograniczyć liczbę aktywnych zapytań, jeśli tryb jest LOW
+            if [ "$RATE_LIMIT_MODE" == "LOW" ] || [ "$STEALTH_MODE" -eq 1 ]; then
+                # Można zmodyfikować plik konfiguracyjny Amass dynamicznie, ale to jest bardziej złożone.
+                # Na razie pomijamy bezpośrednie sterowanie Amass przez te flagi,
+                # polegając na jego wewnętrznych mechanizmach i pliku config.yaml
+                true
+            fi
+            ;;
+        "Waybackurls")
+            # Waybackurls nie ma bezpośrednich opcji limitowania ani UA w CLI
+            # Można użyć curl z opcjami, jeśli Waybackurls jest wywoływany przez curl
+            if [[ "$base_cmd" == *"curl"* ]]; then
+                if [ "$current_delay" -gt 0 ]; then
+                    modified_cmd=$(echo "$base_cmd" | sed "s|curl -s|curl -s --max-time ${TIMEOUT} --connect-timeout ${TIMEOUT} --retry 3 --retry-delay ${current_delay}|g")
+                fi
+                if [ -n "$user_agent_opt" ]; then
+                    modified_cmd=$(echo "$modified_cmd" | sed "s|curl -s|curl -s $user_agent_opt|g")
+                fi
+            fi
+            ;;
+        "Katana")
+            # Katana ma opcje -c (concurrency) i -d (delay)
+            modified_cmd=$(echo "$base_cmd" | sed "s/-silent/-silent -c $current_threads/g")
+            if [ "$current_delay" -gt 0 ]; then
+                modified_cmd+=" -delay ${current_delay}s"
+            fi
+            if [ -n "$user_agent_opt" ]; then
+                modified_cmd+=" -H \"User-Agent: $(echo "$user_agent_opt" | sed 's/-H "User-Agent: //;s/"$//')\""
+            fi
+            ;;
+        "Hakrawler")
+            # Hakrawler ma opcje -t (threads) i -d (delay)
+            modified_cmd=$(echo "$base_cmd" | sed "s|hakrawler|hakrawler -t $current_threads|g")
+            if [ "$current_delay" -gt 0 ]; then
+                modified_cmd+=" -d ${current_delay}s"
+            fi
+            if [ -n "$user_agent_opt" ]; then
+                modified_cmd+=" -ua \"$(echo "$user_agent_opt" | sed 's/-H "User-Agent: //;s/"$//')\""
+            fi
+            ;;
+        "Paramspider")
+            # Paramspider nie ma bezpośrednich opcji limitowania ani UA w CLI
+            # Bazuje na wbudowanym mechanizmie requests, można by modyfikować jego kod źródłowy
+            # Na potrzeby tego skryptu, pomijamy bezpośrednie sterowanie
+            true
+            ;;
+        "CRT.sh")
+            # CRT.sh używa curl, więc możemy dodać opóźnienie i UA
+            if [[ "$base_cmd" == *"curl"* ]]; then
+                if [ "$current_delay" -gt 0 ]; then
+                    modified_cmd=$(echo "$base_cmd" | sed "s|curl -s|curl -s --max-time ${TIMEOUT} --connect-timeout ${TIMEOUT} --retry 3 --retry-delay ${current_delay}|g")
+                fi
+                if [ -n "$user_agent_opt" ]; then
+                    modified_cmd=$(echo "$modified_cmd" | sed "s|curl -s|curl -s $user_agent_opt|g")
+                fi
+            fi
+            ;;
+        *)
+            # Domyślne zachowanie dla nieznanych narzędzi
+            ;;
+    esac
+    echo "$modified_cmd"
+}
+
 
 # ASCII Art
 print_title() {
@@ -101,7 +264,8 @@ run_tool() {
     local output_file="$3" # Opcjonalnie: plik do przekierowania stdout
     local input_file="$4" # Opcjonalnie: plik wejściowy dla narzędzi (np. Katana, Hakrawler)
 
-    local current_cmd="$cmd_template"
+    # Zastosuj opcje limitowania zapytań do komendy
+    local current_cmd=$(apply_rate_limit_options "$tool_name" "$cmd_template")
 
     # Zastąp zmienne w szablonie komendy
     # Zmienne takie jak $domain_part, $domain, $WORDLIST, $THREADS, $TIMEOUT, $amass_opts_str
@@ -109,7 +273,7 @@ run_tool() {
     current_cmd="${current_cmd//\$domain_part/$domain_part}"
     current_cmd="${current_cmd//\$domain/$domain}"
     current_cmd="${current_cmd//\$WORDLIST/$WORDLIST}"
-    current_cmd="${current_cmd//\$THREADS/$THREADS}"
+    current_cmd="${current_cmd//\$THREADS/$THREADS}" # THREADS tutaj może być nadpisane przez apply_rate_limit_options
     current_cmd="${current_cmd//\$TIMEOUT/$TIMEOUT}"
     current_cmd="${current_cmd//\$amass_opts_str/$amass_opts_str}"
 
@@ -218,7 +382,7 @@ show_menu() {
         
         # Wyświetl narzędzia w dwóch kolumnach
         local num_tools=${#TOOLS[@]}
-        local half_num=$(( (num_tools + 1) / 2 )) # Zaokrąglij w górę dla pierwszej kolumny
+        local half_num=$(( (num_tools + 1) / 2 )) # Zaokrąglaj w górę dla pierwszej kolumny
         local col_width=35 # Ustaw szerokość kolumny dla lepszego dopasowania
 
         for ((i=0; i<half_num; i++)); do
@@ -270,6 +434,20 @@ show_menu() {
             echo -e "  ${NC}${RED}[s] Tryb cichy: wyłączony${NC}"
         fi
 
+        # Wyświetlanie trybu limitowania zapytań
+        local rl_display="$RATE_LIMIT_MODE"
+        if [ -n "$CUSTOM_RATE_LIMIT" ]; then
+            rl_display="$CUSTOM_RATE_LIMIT"
+        fi
+        echo -e "  ${BLUE}Limit zapytań (--rl): ${GREEN}${rl_display}${NC}"
+
+        # Wyświetlanie trybu stealth
+        if [ $STEALTH_MODE -eq 1 ]; then
+            echo -e "  ${GREEN}[x] Tryb Stealth: włączony (LOW + opóźnienia + losowy UA)${NC}"
+        else
+            echo -e "  ${NC}${RED}[x] Tryb Stealth: wyłączony${NC}"
+        fi
+
         if [ -n "$OUTPUT_DIR" ]; then
             echo -e "  ${BLUE}Katalog wyjściowy: ${GREEN}${OUTPUT_DIR}${NC}"
         fi
@@ -293,6 +471,14 @@ show_menu() {
             SILENT_MODE=$((1 - SILENT_MODE))
         elif [[ "$key" == "d" && ${SELECTED[3]} -eq 1 ]]; then
             AMASS_ACTIVE=$((1 - AMASS_ACTIVE))
+        elif [[ "$key" == "x" ]]; then # Przełącznik dla trybu stealth
+            STEALTH_MODE=$((1 - STEALTH_MODE))
+            if [ "$STEALTH_MODE" -eq 1 ]; then
+                RATE_LIMIT_MODE="LOW" # Ustawia limit na LOW
+                CUSTOM_RATE_LIMIT=""
+            else
+                RATE_LIMIT_MODE="MEDIUM" # Przywraca domyślny, jeśli stealth wyłączony
+            fi
         fi
         clear # Wyczyść ekran przed ponownym rysowaniem menu w następnej iteracji
     done
@@ -341,7 +527,7 @@ recon_stage() {
                     local protocol="https://"
                     [ -n "$port_part" ] && protocol="http://"
                     # Skonstruuj komendę FFUF dynamicznie ze względu na protokół
-                    cmd_template="ffuf -u \"${protocol}FUZZ.$domain_part\" -w \"$WORDLIST\" -ic -t $THREADS"
+                    cmd_template="ffuf -u \"${protocol}FUZZ.$domain_part\" -w \"$WORDLIST\" -ic -t \$THREADS"
                     output_file="$TMPDIR/ffuf_subdomains.tmp"
                     pids_stage1+=($(run_tool "$tool_name" "$cmd_template" "$output_file"))
                     ;;
@@ -398,8 +584,11 @@ recon_stage() {
     # Upewnij się, że httpx działa i tworzy live_subdomains.tmp przed narzędziami Etapu 2
     if [ -s "$TMPDIR/all_subdomains.tmp" ]; then # Sprawdź, czy plik nie jest pusty
         (
-            # Użycie -silent w httpx, aby nie zaśmiecać wyjścia, jeśli nie jest w trybie cichym
-            if eval "httpx -l \"$TMPDIR/all_subdomains.tmp\" -silent -threads $THREADS -timeout $TIMEOUT -o \"$TMPDIR/live_subdomains.tmp\" $(get_redirection_string)"; then
+            # Zastosuj opcje limitowania zapytań do httpx
+            local httpx_cmd="httpx -l \"$TMPDIR/all_subdomains.tmp\" -silent -threads \$THREADS -timeout \$TIMEOUT"
+            httpx_cmd=$(apply_rate_limit_options "httpx" "$httpx_cmd") # Użyj "httpx" jako nazwy narzędzia dla apply_rate_limit_options
+            
+            if eval "$httpx_cmd -o \"$TMPDIR/live_subdomains.tmp\" $(get_redirection_string)"; then
                 true # Sukces
             else
                 echo -e "${RED}Błąd podczas uruchamiania httpx! Nie udało się znaleźć żywych hostów.${NC}" >&2
@@ -584,7 +773,8 @@ main() {
     touch "$ERROR_LOG" # Upewnij się, że plik logu błędów istnieje
 
     # Parsowanie opcji wiersza poleceń
-    while getopts "u:f:w:t:T:hSjo:" opt; do
+    # Dodano 'r' dla --rl i 'x' dla --stealth
+    while getopts "u:f:w:t:T:hSjo:r:x" opt; do
         case $opt in
             u) URL=$(clean_domain "$OPTARG") ;;
             f) DOMAINS_FILE="$OPTARG" ;;
@@ -592,7 +782,7 @@ main() {
             t) THREADS="$OPTARG" ;;
             T) TIMEOUT="$OPTARG" ;;
             h) 
-                echo "Usage: $0 [-u URL] [-f FILE] [-w WORDLIST] [-t THREADS] [-T TIMEOUT] [-S] [-j] [-o OUTPUT_DIR]"
+                echo "Usage: $0 [-u URL] [-f FILE] [-w WORDLIST] [-t THREADS] [-T TIMEOUT] [-S] [-j] [-o OUTPUT_DIR] [--rl RATE_LIMIT_MODE] [--stealth]"
                 echo "  -u URL         Docelowy URL (np. example.com)"
                 echo "  -f FILE        Plik zawierający listę domen"
                 echo "  -w WORDLIST    Ścieżka do pliku listy słów (domyślnie: /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt)"
@@ -601,10 +791,14 @@ main() {
                 echo "  -S             Włącz tryb cichy (pomija wyjście narzędzi)"
                 echo "  -j             Generuj raport JSON"
                 echo "  -o OUTPUT_DIR  Określ katalog wyjściowy"
+                echo "  -r RATE_LIMIT_MODE Tryb limitowania zapytań: LOW|MEDIUM|HIGH|<liczba> (domyślnie: MEDIUM)"
+                echo "  -x             Włącz tryb stealth (automatycznie ustawia --rl=LOW + opóźnienia + losowy User-Agent)"
                 echo ""
                 echo "Przykłady użycia:"
                 echo "  $0 -u example.com"
                 echo "  $0 -f domains.txt -j -o my_scan_results"
+                echo "  $0 -u example.com --rl LOW"
+                echo "  $0 -u example.com --stealth"
                 exit 0
                 ;;
             S) SILENT_MODE=1 ;;
@@ -612,9 +806,31 @@ main() {
             o) OUTPUT_DIR="$OPTARG"
                mkdir -p "$OUTPUT_DIR" || { echo -e "${RED}Błąd: Nie można utworzyć katalogu wyjściowego: $OUTPUT_DIR${NC}" >&2; exit 1; }
                ;;
+            r) # Obsługa parametru --rl
+                case "$OPTARG" in
+                    "LOW"|"MEDIUM"|"HIGH")
+                        RATE_LIMIT_MODE="$OPTARG"
+                        CUSTOM_RATE_LIMIT="" # Resetuj niestandardowy limit
+                        ;;
+                    *)
+                        if [[ "$OPTARG" =~ ^[0-9]+$ ]]; then
+                            RATE_LIMIT_MODE="CUSTOM"
+                            CUSTOM_RATE_LIMIT="$OPTARG"
+                        else
+                            echo -e "${RED}Nieprawidłowa wartość dla --rl: $OPTARG. Użyj LOW, MEDIUM, HIGH lub liczby.${NC}" >&2
+                            exit 1
+                        fi
+                        ;;
+                esac
+                ;;
+            x) # Obsługa parametru --stealth
+                STEALTH_MODE=1
+                RATE_LIMIT_MODE="LOW" # Tryb stealth wymusza LOW
+                CUSTOM_RATE_LIMIT="" # Resetuj niestandardowy limit
+                ;;
             *) 
                 echo -e "${RED}Nieprawidłowa opcja: -$OPTARG${NC}" >&2
-                echo "Usage: $0 [-u URL] [-f FILE] [-t THREADS] [-T TIMEOUT] [-S] [-j] [-o OUTPUT_DIR]" >&2
+                echo "Usage: $0 [-u URL] [-f FILE] [-t THREADS] [-T TIMEOUT] [-S] [-j] [-o OUTPUT_DIR] [--rl RATE_LIMIT_MODE] [--stealth]" >&2
                 exit 1
                 ;;
         esac
