@@ -782,7 +782,7 @@ main() {
             t) THREADS="$OPTARG" ;;
             T) TIMEOUT="$OPTARG" ;;
             h) 
-                echo "Usage: $0 [-u URL] [-f FILE] [-w WORDLIST] [-t THREADS] [-T TIMEOUT] [-S] [-j] [-o OUTPUT_DIR] [-r RATE_LIMIT_MODE] [-x]"
+                echo "Usage: totalsubfinder [-u URL] [-f FILE] [-w WORDLIST] [-t THREADS] [-T TIMEOUT] [-S] [-j] [-o OUTPUT_DIR] [-r RATE_LIMIT_MODE] [-x]"
                 echo "  -u URL         Docelowy URL (np. example.com)"
                 echo "  -f FILE        Plik zawierający listę domen"
                 echo "  -w WORDLIST    Ścieżka do pliku listy słów (domyślnie: /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt)"
@@ -795,10 +795,10 @@ main() {
                 echo "  -x             Włącz tryb stealth (automatycznie ustawia -r LOW + opóźnienia + losowy User-Agent)"
                 echo ""
                 echo "Przykłady użycia:"
-                echo "  $0 -u example.com"
-                echo "  $0 -f domains.txt -j -o my_scan_results"
-                echo "  $0 -u example.com -r LOW"
-                echo "  $0 -u example.com -x"
+                echo "  totalsubfinder -u example.com"
+                echo "  totalsubfinder -f domains.txt -j -o my_scan_results"
+                echo "  totalsubfinder -u example.com -r LOW"
+                echo "  totalsubfinder -u example.com -x"
                 exit 0
                 ;;
             S) SILENT_MODE=1 ;;
