@@ -55,7 +55,7 @@ Skrypt instalacyjny (install.sh) sprawdzi te narzędzia i spróbuje je zainstalo
 ## **🖼️ Zrzuty ekranu**
 
 Oto przykład wyjścia TotalSubFinder:  
-\!(https://github.com/Xzar-x/images/raw/main/subsearcher.png)
+![Zrzut ekranu z działania TotalSubFinder](https://github.com/Xzar-x/images/raw/main/totalsubfinder.png)
 
 ## **📄 Licencja**
 
