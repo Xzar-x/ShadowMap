@@ -43,6 +43,7 @@ fi
 # Jeśli jakieś narzędzia są brakujące, zapytaj użytkownika, czy je zainstalować
 if [ ${#missing_tools[@]} -ne 0 ]; then
     echo -e "\n${YELLOW}Następujące narzędzia są brakujące: ${missing_tools[*]}${NC}"
+    # Usunięto ${NC} z wnętrza promptu read -p
     read -p "${YELLOW}Czy chcesz zainstalować brakujące narzędzia? [T/n]: ${NC}" answer
     answer=${answer:-T} # Domyślnie tak
 
@@ -107,7 +108,7 @@ if [ ${#missing_tools[@]} -ne 0 ]; then
                             echo -e "${RED}Nie udało się zainstalować waybackurls za pomocą go install.${NC}"
                         fi
                     else
-                        echo -e "${YELLOW}Aby zainstalować waybackurls, potrzebujesz Go. Proszę zainstalować Go ręcznie.${NC}"
+                        echo -e "${YELLOW}Aby zainstalować waybackurls, potrzebujesz Go. Proszem zainstalować Go ręcznie.${NC}"
                     fi
                     ;;
                 katana)
@@ -180,6 +181,7 @@ amass_config_dest="$user_home/.config/amass/config.yaml"
 mkdir -p "$user_home/.config/amass"
 
 if [ -f "$amass_config_dest" ]; then
+    # Usunięto ${NC} z wnętrza promptu read -p
     read -p "${YELLOW}Plik konfiguracyjny Amass już istnieje w $amass_config_dest. Nadpisać? [t/N]: ${NC}" replace_amass
     replace_amass=${replace_amass:-N} # Domyślnie nie
     if [[ "$replace_amass" =~ ^[Tt]$ ]]; then
@@ -205,6 +207,7 @@ subfinder_config_dest="$user_home/.config/subfinder/config.yaml"
 mkdir -p "$user_home/.config/subfinder"
 
 if [ -f "$subfinder_config_dest" ]; then
+    # Usunięto ${NC} z wnętrza promptu read -p
     read -p "${YELLOW}Plik konfiguracyjny Subfinder już istnieje w $subfinder_config_dest. Nadpisać? [t/N]: ${NC}" replace_subfinder
     replace_subfinder=${replace_subfinder:-N} # Domyślnie nie
     if [[ "$replace_subfinder" =~ ^[Tt]$ ]]; then
