@@ -235,7 +235,7 @@ scan_domain() {
 
 
     # Ensure temporary files are cleaned up on exit
-    trap "rm -f \"$waybackurls_out\" \"$katana_out\" \"$hakrawler_out\" \"$paramspider_out\" \"$all_subdomains_tmp\" \"$found_urls_tmp\" \"$urls_with_params_tmp\" \"$vhost_status_200_tmp\" live_subdomains.txt" EXIT
+    trap "rm -f \"$waybackurls_out\" \"$katana_out\" \"$hakrawler_out\" \"$paramspider_out\" \"$all_subdomains_tmp\" \"$found_urls_tmp\" \"$urls_with_params_tmp\" \"$vhost_status_200_tmp\"" EXIT
 
     local pids_stage1=() # PIDs for subdomain enumeration tools
     local pids_stage2=() # PIDs for crawling/parameter finding tools
