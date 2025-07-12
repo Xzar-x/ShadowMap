@@ -4,7 +4,7 @@ GREEN='\033[0;32m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
 set -e
-
+sudo rm $(which httpx)
 # Function to check if a tool is installed
 check_tool() {
     if ! command -v "$1" &>/dev/null; then
