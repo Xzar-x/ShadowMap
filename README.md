@@ -6,7 +6,7 @@ TotalSubFinder to narzędzie, które łączy kilka potężnych skryptów do enum
 
 Aby zainstalować TotalSubFinder, uruchom następujące polecenia:
 
-git clone https://github.com/Xzar-x/subfinder.git \# Repozytorium może nadal nazywać się SubSearcher  
+git clone https://github.com/Xzar-x/TotalSubFinder.git \# Repozytorium może nadal nazywać się SubSearcher  
 cd totalsubfinder \# Przejdź do katalogu repozytorium  
 chmod \+x install.sh  
 ./install.sh
