@@ -2,10 +2,12 @@
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'
-NC='\033[0m' # No Color
+YELLOW='\033[0;33m' # Dodano kolor żółty
+BLUE='\033[0;34m'  # Dodano kolor niebieski
+NC='\033[0m'       # No Color
 set -e # Exit immediately if a command exits with a non-zero status
 
-sudo rm -f "$(which httpx)" 
+sudo rm -f "$(which httpx)"
 
 # Funkcja do sprawdzania, czy narzędzie jest zainstalowane
 check_tool() {
@@ -31,7 +33,7 @@ for tool in "${TOOLS[@]}"; do
     fi
 done
 
-# Jeśli brakuje narzędzi opartych na Go, sprawdź, czy Go jest zainstalowany
+# Jeśli brakuje narzędzi opartych na Go, sprawdź, czy Go jest zainstalowane
 if [[ " ${missing_tools[@]} " =~ " subfinder " || " ${missing_tools[@]} " =~ " httpx " || " ${missing_tools[@]} " =~ " waybackurls " || " ${missing_tools[@]} " =~ " katana " || " ${missing_tools[@]} " =~ " hakrawler " ]]; then
     if ! check_tool "go"; then
         echo -e "${YELLOW}Uwaga: 'go' nie jest zainstalowane. Aby zainstalować narzędzia oparte na Go (np. subfinder, httpx, waybackurls, katana, hakrawler), proszę zainstalować Go z https://golang.org/dl/ lub za pomocą menedżera pakietów dystrybucji.${NC}"
@@ -41,7 +43,7 @@ fi
 # Jeśli jakieś narzędzia są brakujące, zapytaj użytkownika, czy je zainstalować
 if [ ${#missing_tools[@]} -ne 0 ]; then
     echo -e "\n${YELLOW}Następujące narzędzia są brakujące: ${missing_tools[*]}${NC}"
-    read -p "Czy chcesz zainstalować brakujące narzędzia? [T/n]: " answer
+    read -p "${YELLOW}Czy chcesz zainstalować brakujące narzędzia? [T/n]: ${NC}" answer
     answer=${answer:-T} # Domyślnie tak
 
     if [[ "$answer" =~ ^[Tt]$ ]]; then
@@ -50,7 +52,7 @@ if [ ${#missing_tools[@]} -ne 0 ]; then
             echo -e "${RED}Nie udało się zaktualizować listy pakietów. Proszę sprawdzić połączenie sieciowe lub źródła pakietów.${NC}"
             exit 1
         fi
-        
+
         # Instalowanie brakujących narzędzi
         for tool in "${missing_tools[@]}"; do
             echo -e "${BLUE}Instaluję $tool...${NC}"
