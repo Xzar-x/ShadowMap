@@ -1,35 +1,70 @@
 #!/bin/bash
 
-# Colors
+# Kolory
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 RED='\033[0;31m'
 YELLOW='\033[0;33m'
-NC='\033[0m' # No Color - przywrócono standardowy kod
+NC='\033[0m' # Brak koloru - przywrócono standardowy kod
 
-# Default configuration
+# Domyślna konfiguracja
 URL=""
 DOMAINS_FILE=""
 WORDLIST="/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt"
 THREADS=40
 TIMEOUT=30
-# Added new tools to the list
-TOOLS=("FFUF Subdomain" "Gobuster Vhost" "Subfinder" "Amass (long scan)" "Waybackurls" "Katana" "Hakrawler" "Paramspider")
-# Domyślne włączenie wszystkich kluczowych narzędzi enumeracji subdomen
-SELECTED=(1 1 1 1 1 1 1 1) # All selected by default
 
-# Amass options
+# Zdefiniowanie narzędzi i ich nazw do wyświetlania w menu
+TOOLS=(
+    "FFUF Subdomain"
+    "Gobuster Vhost"
+    "Subfinder"
+    "Amass (long scan)"
+    "Waybackurls"
+    "Katana"
+    "Hakrawler"
+    "Paramspider"
+    "CRT.sh" # Nowe narzędzie
+)
+
+# Domyślne włączenie wszystkich kluczowych narzędzi enumeracji subdomen
+SELECTED=(1 1 1 1 1 1 1 1 1) # Wszystkie wybrane domyślnie
+
+# Opcje Amass
 AMASS_PASSIVE=1
 AMASS_BRUTE=0
 AMASS_ACTIVE=0
 
-# Global silent mode (0 = off, 1 = on)
+# Globalny tryb cichy (0 = wyłączony, 1 = włączony)
 SILENT_MODE=0
 
-# Error log file
+# Plik logu błędów
 ERROR_LOG="totalsubfinder_error.log"
 
-# Function to strip ANSI escape codes for length calculation
+# Opcje wyjścia
+JSON_OUTPUT=0
+OUTPUT_DIR="" # Domyślny katalog wyjściowy to bieżący
+
+# Tymczasowy katalog (ustawiany w main)
+TMPDIR=""
+
+# Globalna zmienna dla opcji Amass, aby była dostępna w run_tool
+amass_opts_str=""
+
+# Deklaracja tablicy asocjacyjnej dla komend narzędzi
+declare -A TOOL_CMDS=(
+  ["FFUF Subdomain"]="ffuf -u 'https://FUZZ.\$domain_part' -w '\$WORDLIST' -ic -t \$THREADS" # Komenda bazowa, protokół będzie zmieniany dynamicznie
+  ["Gobuster Vhost"]="gobuster vhost -u 'http://\$domain' --append-domain -w '\$WORDLIST' -t \$THREADS"
+  ["Subfinder"]="subfinder -d '\$domain_part' -silent"
+  ["Amass (long scan)"]="amass enum \$amass_opts_str -d '\$domain_part' -json /dev/stdout --config '\$HOME/.config/amass/config.yaml'"
+  ["Waybackurls"]="waybackurls '\$domain_part'"
+  ["Katana"]="katana -silent" # Katana będzie używać stdin z live_subdomains.tmp
+  ["Hakrawler"]="hakrawler" # Hakrawler będzie używać stdin z live_subdomains.tmp
+  ["Paramspider"]="paramspider -d '\$domain_part'"
+  ["CRT.sh"]="curl -s 'https://crt.sh/?q=%25.\$domain_part&output=json' | jq -r '.[].common_name' | sed 's/^\*\.//g' | sort -u"
+)
+
+# Funkcja do usuwania kodów ANSI escape dla obliczania długości
 strip_ansi_codes() {
     echo "$1" | sed 's/\x1b\[[0-9;]*m//g'
 }
@@ -48,89 +83,142 @@ EOF
     echo -e "${BLUE}TotalSubFinder${NC} - Automated Reconnaissance Toolkit        ${GREEN}Made by Xzar${NC}\n"
 }
 
-# Function to return redirection string based on SILENT_MODE
+# Funkcja zwracająca ciąg przekierowania na podstawie SILENT_MODE
 # Przekierowanie błędów zawsze do ERROR_LOG
 get_redirection_string() {
     if [ $SILENT_MODE -eq 1 ]; then
-        echo ">/dev/null 2>> \"$ERROR_LOG\"" # Redirect stdout to null, stderr to error log
+        echo ">/dev/null 2>> \"$ERROR_LOG\"" # Przekieruj stdout do null, stderr do logu błędów
     else
-        echo "2>> \"$ERROR_LOG\"" # Redirect stderr to error log
+        echo "2>> \"$ERROR_LOG\"" # Przekieruj stderr do logu błędów
     fi
 }
 
-# Function to display a spinner animation in the background
-# It takes the PIDs of the processes to monitor and the message
+# Funkcja do uruchamiania narzędzia i monitorowania go spinnerem
+# Zwraca PID podpowłoki uruchamiającej narzędzie
+run_tool() {
+    local tool_name="$1"
+    local cmd_template="$2"
+    local output_file="$3" # Opcjonalnie: plik do przekierowania stdout
+    local input_file="$4" # Opcjonalnie: plik wejściowy dla narzędzi (np. Katana, Hakrawler)
+
+    local current_cmd="$cmd_template"
+
+    # Zastąp zmienne w szablonie komendy
+    # Zmienne takie jak $domain_part, $domain, $WORDLIST, $THREADS, $TIMEOUT, $amass_opts_str
+    # muszą być dostępne w zasięgu wywołania run_tool.
+    current_cmd="${current_cmd//\$domain_part/$domain_part}"
+    current_cmd="${current_cmd//\$domain/$domain}"
+    current_cmd="${current_cmd//\$WORDLIST/$WORDLIST}"
+    current_cmd="${current_cmd//\$THREADS/$THREADS}"
+    current_cmd="${current_cmd//\$TIMEOUT/$TIMEOUT}"
+    current_cmd="${current_cmd//\$amass_opts_str/$amass_opts_str}"
+
+    (
+        # Użyj eval do wykonania komendy, z odpowiednimi przekierowaniami
+        if [ -n "$input_file" ]; then
+            if [ -n "$output_file" ]; then
+                eval "cat \"$input_file\" | $current_cmd > \"$output_file\" $(get_redirection_string)"
+            else
+                eval "cat \"$input_file\" | $current_cmd $(get_redirection_string)"
+            fi
+        else
+            if [ -n "$output_file" ]; then
+                eval "$current_cmd > \"$output_file\" $(get_redirection_string)"
+            else
+                eval "$current_cmd $(get_redirection_string)"
+            fi
+        fi
+    ) &
+    echo $! # Zwróć PID podpowłoki uruchamiającej narzędzie
+}
+
+# Funkcja do wyświetlania animacji spinnera w tle
+# Przyjmuje PIDy procesów do monitorowania i wiadomość
 start_spinner() {
     if [ $SILENT_MODE -eq 1 ]; then
-        return # Do not show spinner in silent mode
+        return # Nie pokazuj spinnera w trybie cichym
     fi
-    local msg="$1" # First argument is the message
-    shift # Remove message from arguments, remaining are PIDs
-    local pids_to_monitor=("$@") # Get all remaining arguments as an array
+    local msg="$1" # Pierwszy argument to wiadomość
+    shift # Usuń wiadomość z argumentów, pozostałe to PIDy
+    local pids_to_monitor=("$@") # Pobierz wszystkie pozostałe argumenty jako tablicę
 
-    ( # Run spinner in a subshell
+    ( # Uruchom spinner w podpowłoce
         local spin='-\|/'
         local i=0
         local all_done=0
+        local start_time=$(date +%s)
+        local timeout_seconds=600 # Timeout spinnera po 10 minutach (600 sekund)
+
         while [ "$all_done" -eq 0 ]; do
             all_done=1
             for pid in "${pids_to_monitor[@]}"; do
-                if kill -0 "$pid" 2>/dev/null; then # Check if PID is still running
+                if kill -0 "$pid" 2>/dev/null; then # Sprawdź, czy PID nadal działa
                     all_done=0
                     break
                 fi
             done
+            
+            local current_time=$(date +%s)
+            if (( current_time - start_time > timeout_seconds )); then
+                echo -ne "\r${RED}✗ ${msg} przekroczył limit czasu (${timeout_seconds}s)!${NC}\n"
+                # Zabij procesy, które przekroczyły limit czasu
+                for pid in "${pids_to_monitor[@]}"; do
+                    kill "$pid" 2>/dev/null
+                done
+                exit 1 # Wyjdź z podpowłoki spinnera
+            fi
+
             i=$(( (i+1) % 4 ))
             echo -ne "\r${YELLOW}${spin:$i:1} ${msg}...${NC}"
             sleep 0.1
         done
         echo -ne "\r${GREEN}✓ ${msg} zakończony!${NC}\n"
     ) &
-    echo $! # Return the PID of the spinner subshell
+    echo $! # Zwróć PID podpowłoki spinnera
 }
 
 
-# Check dependencies
+# Sprawdź zależności
 check_dependencies() {
     local missing=0
-    # Dodano 'httpx' do listy narzędzi do sprawdzenia, upewnij się, że jest zainstalowany.
-    local tools=("ffuf" "gobuster" "subfinder" "amass" "httpx" "jq" "waybackurls" "katana" "hakrawler") 
+    # Dodano 'httpx' i 'jq' do listy narzędzi do sprawdzenia
+    local tools=("ffuf" "gobuster" "subfinder" "amass" "httpx" "jq" "waybackurls" "katana" "hakrawler" "curl") 
     
-    echo -e "${BLUE}Checking dependencies...${NC}"
+    echo -e "${BLUE}Sprawdzanie zależności...${NC}"
     for tool in "${tools[@]}"; do
         if ! command -v "$tool" &> /dev/null; then
-            echo -e "${RED}Missing: $tool${NC}" >&2
+            echo -e "${RED}Brak: $tool${NC}" >&2
             missing=1
         else
-            echo -e "${GREEN}Found: $tool${NC}"
+            echo -e "${GREEN}Znaleziono: $tool${NC}"
         fi
     done
 
     # Lepsze sprawdzanie paramspidera
     if ! command -v "paramspider" &> /dev/null; then 
-        echo -e "${RED}Missing: paramspider (ensure it's installed and in your PATH, e.g., /usr/local/bin/paramspider. Try 'pip install paramspider' or 'git clone https://github.com/0xasm0d3us/ParamSpider.git' and add to PATH.)${NC}" >&2
+        echo -e "${RED}Brak: paramspider (upewnij się, że jest zainstalowany i w twojej PATH, np. /usr/local/bin/paramspider. Spróbuj 'pip install paramspider' lub 'git clone https://github.com/0xasm0d3us/ParamSpider.git' i dodaj do PATH.)${NC}" >&2
         missing=1
     else
-        echo -e "${GREEN}Found: paramspider${NC}"
+        echo -e "${GREEN}Znaleziono: paramspider${NC}"
     fi
     
     if [ $missing -eq 1 ]; then
-        echo -e "\n${RED}Missing required tools. Please install them before continuing.${NC}" >&2
-        echo "Check $ERROR_LOG for details." # Informacja o pliku logu
+        echo -e "\n${RED}Brak wymaganych narzędzi. Zainstaluj je przed kontynuowaniem.${NC}" >&2
+        echo "Sprawdź $ERROR_LOG, aby uzyskać szczegóły." # Informacja o pliku logu
         exit 1
     fi
 }
 
-# Main menu
+# Główne menu
 show_menu() {
-    clear # Clear screen once at the beginning of the menu
+    clear # Wyczyść ekran raz na początku menu
     while true; do
         print_title
         echo -e "${YELLOW}Wybierz narzędzia: [1-${#TOOLS[@]}] przełącz główne narzędzia, [a/b/d] przełącz opcje Amass, ENTER aby kontynuować${NC}"
         
-        # Display tools in two columns
+        # Wyświetl narzędzia w dwóch kolumnach
         local num_tools=${#TOOLS[@]}
-        local half_num=$(( (num_tools + 1) / 2 )) # Round up for the first column
+        local half_num=$(( (num_tools + 1) / 2 )) # Zaokrąglij w górę dla pierwszej kolumny
         local col_width=35 # Ustaw szerokość kolumny dla lepszego dopasowania
 
         for ((i=0; i<half_num; i++)); do
@@ -151,7 +239,7 @@ show_menu() {
             fi
             
             # Obliczanie wypełnienia na podstawie widocznej długości tekstu
-            local left_len=$(echo "$left_display_text" | wc -c) # Używamy wc -c dla długości w znakach
+            local left_len=$(strip_ansi_codes "$left_full_text" | wc -c) # Używamy wc -c dla długości w znakach
             local padding=$(( col_width - left_len ))
             if [ $padding -lt 1 ]; then padding=1; fi # Zapewnij co najmniej jedną spację
 
@@ -159,7 +247,7 @@ show_menu() {
             echo -e "${left_full_text}$(printf '%*s' "$padding" "")${right_full_text}"
         done
 
-        # Amass options (more compact, on one line)
+        # Opcje Amass (bardziej kompaktowe, w jednej linii)
         if [ ${SELECTED[3]} -eq 1 ]; then
             local passive_status=$( [ $AMASS_PASSIVE -eq 1 ] && echo -e "${GREEN}wł." || echo -e "${RED}wył." )
             local brute_status=$( [ $AMASS_BRUTE -eq 1 ] && echo -e "${GREEN}wł." || echo -e "${RED}wył." )
@@ -170,7 +258,7 @@ show_menu() {
         fi
 
         echo -e "${BLUE}Aktualne ustawienia:${NC}"
-        # Display settings on fewer lines
+        # Wyświetl ustawienia na mniejszej liczbie linii
         local domain_display="${URL:-$DOMAINS_FILE}"
         echo -e "  Domena: ${GREEN}${domain_display}${NC}"
         echo -e "  Lista słów: ${GREEN}${WORDLIST}${NC}"
@@ -180,6 +268,13 @@ show_menu() {
             echo -e "  ${GREEN}[s] Tryb cichy: włączony${NC}"
         else
             echo -e "  ${NC}${RED}[s] Tryb cichy: wyłączony${NC}"
+        fi
+
+        if [ -n "$OUTPUT_DIR" ]; then
+            echo -e "  ${BLUE}Katalog wyjściowy: ${GREEN}${OUTPUT_DIR}${NC}"
+        fi
+        if [ $JSON_OUTPUT -eq 1 ]; then
+            echo -e "  ${BLUE}Wyjście JSON: ${GREEN}włączone${NC}"
         fi
         
         echo -e "Naciśnij 1-${#TOOLS[@]} aby przełączyć narzędzia, a/b/d dla opcji Amass, ENTER aby rozpocząć"
@@ -199,11 +294,11 @@ show_menu() {
         elif [[ "$key" == "d" && ${SELECTED[3]} -eq 1 ]]; then
             AMASS_ACTIVE=$((1 - AMASS_ACTIVE))
         fi
-        clear # Clear screen before re-drawing the menu in the next iteration
+        clear # Wyczyść ekran przed ponownym rysowaniem menu w następnej iteracji
     done
 }
 
-# Domain validation
+# Walidacja domeny
 is_valid_domain() {
     local domain_regex='^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}(:[0-9]{1,5})?$'
     [[ $1 =~ $domain_regex ]]
@@ -213,121 +308,76 @@ clean_domain() {
     echo "$1" | sed -e 's|^[^/]*//||' -e 's|/.*$||' -e 's/^www\.//'
 }
 
-scan_domain() {
+# Etap 1: Enumeracja subdomen
+recon_stage() {
     local domain=$1
-    echo -e "\n${BLUE}Skanowanie: ${GREEN}$domain${NC}"
-    
-    # Split domain and port
     local domain_part=$(echo "$domain" | cut -d':' -f1)
     local port_part=$(echo "$domain" | grep -q ':' && echo "$domain" | cut -d':' -f2 || echo "")
-    
-    # Temporary files (using mktemp for unique names)
-    local waybackurls_out=$(mktemp --suffix=".txt" waybackurls_"$domain_part".XXXXXX)
-    local katana_out=$(mktemp --suffix=".txt" katana_"$domain_part".XXXXXX)
-    local hakrawler_out=$(mktemp --suffix=".txt" hakrawler_"$domain_part".XXXXXX)
-    local paramspider_out=$(mktemp --suffix=".txt" paramspider_"$domain_part".XXXXXX)
 
-    # Temporary files for consolidation
-    local all_subdomains_tmp=$(mktemp --suffix=".txt" all_subdomains_tmp.XXXXXX)
-    local found_urls_tmp=$(mktemp --suffix=".txt" found_urls_tmp.XXXXXX)
-    local urls_with_params_tmp=$(mktemp --suffix=".txt" urls_with_params_tmp.XXXXXX)
-    local vhost_status_200_tmp=$(mktemp --suffix=".txt" vhost_status_200_tmp.XXXXXX)
+    echo -e "${BLUE}Rozpoczynam etap 1: Enumeracja subdomen dla ${GREEN}$domain${NC}"
 
+    local pids_stage1=() # PIDs dla narzędzi enumeracji subdomen
 
-    # Ensure temporary files are cleaned up on exit
-    trap "rm -f \"$waybackurls_out\" \"$katana_out\" \"$hakrawler_out\" \"$paramspider_out\" \"$all_subdomains_tmp\" \"$found_urls_tmp\" \"$urls_with_params_tmp\" \"$vhost_status_200_tmp\"" EXIT
-
-    local pids_stage1=() # PIDs for subdomain enumeration tools
-    local pids_stage2=() # PIDs for crawling/parameter finding tools
-
-    local redir_output_val=$(get_redirection_string) # Get redirection string once
-
-    # --- Etap 1: Enumeracja subdomen ---
-    echo -e "${BLUE}Rozpoczynam etap 1: Enumeracja subdomen...${NC}"
-
-    # FFUF Subdomain
-    if [ ${SELECTED[0]} -eq 1 ]; then
-        (
-            echo -e "${BLUE}[+] FFUF Subdomain${NC}"
-            protocol="https://"
-            [ -n "$port_part" ] && protocol="http://"
-            # Przekierowanie wyjścia FFUF bezpośrednio do all_subdomains_tmp
-            if eval "ffuf -u \"${protocol}FUZZ.$domain_part\" -w \"$WORDLIST\" -ic -t $THREADS -o /dev/stdout $redir_output_val | grep -Eo \"([a-zA-Z0-9-]+\.)+$domain_part\" | sed 's|^http[s]*://||' | sort -u >> \"$all_subdomains_tmp\""; then
-                true # Success
-            else
-                echo -e "${RED}Błąd podczas uruchamiania FFUF!${NC}" >&2
-            fi
-        ) &
-        pids_stage1+=($!)
+    # Konfiguracja opcji Amass (musi być wykonana przed jakimkolwiek wywołaniem Amass)
+    local amass_opts=()
+    if [ $AMASS_PASSIVE -eq 0 ] && [ $AMASS_BRUTE -eq 0 ] && [ $AMASS_ACTIVE -eq 0 ]; then
+        AMASS_PASSIVE=1
     fi
+    [ $AMASS_PASSIVE -eq 1 ] && amass_opts+=("-passive")
+    [ $AMASS_BRUTE -eq 1 ] && amass_opts+=("-brute")
+    [ $AMASS_ACTIVE -eq 1 ] && amass_opts+=("-active")
+    amass_opts_str="${amass_opts[@]}" # Ustaw zmienną globalną
 
-    # Gobuster Vhost
-    if [ ${SELECTED[1]} -eq 1 ]; then
-        (
-            echo -e "${BLUE}[+] Gobuster Vhost${NC}"
-            # Przekierowanie wyjścia Gobuster bezpośrednio do all_subdomains_tmp i vhost_status_200_tmp
-            if eval "gobuster vhost -u \"http://$domain\" --append-domain -w \"$WORDLIST\" -t $THREADS $redir_output_val | tee >(grep \"Found:\" | grep -i \"status: 200\" | cut -d' ' -f2 | sort -u >> \"$vhost_status_200_tmp\") | grep \"Found:\" | cut -d' ' -f2 | sort -u >> \"$all_subdomains_tmp\""; then
-                true # Success
-            else
-                echo -e "${RED}Błąd podczas uruchamiania Gobuster!${NC}" >&2
-            fi
-        ) &
-        pids_stage1+=($!)
-    fi
+    for i in "${!TOOLS[@]}"; do
+        local tool_name="${TOOLS[$i]}"
+        local cmd_template="${TOOL_CMDS[$tool_name]}"
+        local output_file=""
+        local input_file="" # Nieużywany w tym etapie, ale dla spójności
 
-    # Subfinder
-    if [ ${SELECTED[2]} -eq 1 ]; then
-        (
-            echo -e "${BLUE}[+] Subfinder${NC}"
-            # Przekierowanie wyjścia Subfinder bezpośrednio do all_subdomains_tmp
-            if eval "subfinder -d \"$domain_part\" -silent $redir_output_val >> \"$all_subdomains_tmp\""; then
-                true # Success
-            else
-                echo -e "${RED}Błąd podczas uruchamiania Subfinder!${NC}" >&2
-            fi
-        ) &
-        pids_stage1+=($!)
-    fi
+        if [ ${SELECTED[$i]} -eq 1 ]; then
+            case "$tool_name" in
+                "FFUF Subdomain")
+                    echo -e "${BLUE}[+] FFUF Subdomain${NC}"
+                    local protocol="https://"
+                    [ -n "$port_part" ] && protocol="http://"
+                    # Skonstruuj komendę FFUF dynamicznie ze względu na protokół
+                    cmd_template="ffuf -u \"${protocol}FUZZ.$domain_part\" -w \"$WORDLIST\" -ic -t $THREADS"
+                    output_file="$TMPDIR/ffuf_subdomains.tmp"
+                    pids_stage1+=($(run_tool "$tool_name" "$cmd_template" "$output_file"))
+                    ;;
+                "Gobuster Vhost")
+                    echo -e "${BLUE}[+] Gobuster Vhost${NC}"
+                    output_file="$TMPDIR/gobuster_vhost.tmp"
+                    pids_stage1+=($(run_tool "$tool_name" "$cmd_template" "$output_file"))
+                    ;;
+                "Subfinder")
+                    echo -e "${BLUE}[+] Subfinder${NC}"
+                    output_file="$TMPDIR/subfinder_subdomains.tmp"
+                    pids_stage1+=($(run_tool "$tool_name" "$cmd_template" "$output_file"))
+                    ;;
+                "Amass (long scan)")
+                    echo -e "${BLUE}[+] Amass${NC}"
+                    output_file="$TMPDIR/amass_subdomains.tmp"
+                    pids_stage1+=($(run_tool "$tool_name" "$cmd_template" "$output_file"))
+                    ;;
+                "CRT.sh")
+                    echo -e "${BLUE}[+] CRT.sh${NC}"
+                    output_file="$TMPDIR/crtsh_subdomains.tmp"
+                    pids_stage1+=($(run_tool "$tool_name" "$cmd_template" "$output_file"))
+                    ;;
+                "Waybackurls")
+                    echo -e "${BLUE}[+] Waybackurls${NC}"
+                    output_file="$TMPDIR/waybackurls_out.tmp"
+                    pids_stage1+=($(run_tool "$tool_name" "$cmd_template" "$output_file"))
+                    ;;
+                *)
+                    # Narzędzia niebędące częścią etapu recon, lub już obsłużone
+                    ;;
+            esac
+        fi
+    done
 
-    # Amass
-    if [ ${SELECTED[3]} -eq 1 ]; then
-        (
-            echo -e "${BLUE}[+] Amass${NC}"
-            amass_opts=()
-            # Ensure at least one Amass option is selected if Amass is enabled
-            if [ $AMASS_PASSIVE -eq 0 ] && [ $AMASS_BRUTE -eq 0 ] && [ $AMASS_ACTIVE -eq 0 ]; then
-                AMASS_PASSIVE=1 # Default to passive if none selected
-            fi
-            
-            [ $AMASS_PASSIVE -eq 1 ] && amass_opts+=("-passive")
-            [ $AMASS_BRUTE -eq 1 ] && amass_opts+=("-brute")
-            [ $AMASS_ACTIVE -eq 1 ] && amass_opts+=("-active")
-            
-            # Amass configuration file is crucial for API keys
-            # Przekierowanie wyjścia Amass bezpośrednio do all_subdomains_tmp
-            if eval "amass enum \"${amass_opts[@]}\" -d \"$domain_part\" -json /dev/stdout --config \"$HOME/.config/amass/config.yaml\" $redir_output_val | jq -r '.name' | sort -u >> \"$all_subdomains_tmp\""; then
-                true # Success
-            else
-                echo -e "${RED}Błąd podczas uruchamiania Amass! Sprawdź konfigurację API kluczy.${NC}" >&2
-            fi
-        ) &
-        pids_stage1+=($!)
-    fi
-
-    # Waybackurls
-    if [ ${SELECTED[4]} -eq 1 ]; then
-        (
-            echo -e "${BLUE}[+] Waybackurls${NC}"
-            if eval "waybackurls \"$domain_part\" $redir_output_val > \"$waybackurls_out\""; then
-                cat "$waybackurls_out" >> "$found_urls_tmp"
-            else
-                echo -e "${RED}Błąd podczas uruchamiania Waybackurls!${NC}" >&2
-            fi
-        ) &
-        pids_stage1+=($!)
-    fi
-
-    # Wait for all Stage 1 processes to finish
+    # Poczekaj, aż wszystkie procesy Etapu 1 zakończą się
     if [ ${#pids_stage1[@]} -gt 0 ]; then
         spinner_pid=$(start_spinner "Etap 1: Enumeracja subdomen" "${pids_stage1[@]}")
         for pid in "${pids_stage1[@]}"; do
@@ -336,120 +386,89 @@ scan_domain() {
         kill "$spinner_pid" 2>/dev/null
     fi
 
-    # Consolidate all_subdomains.txt and find live hosts after Stage 1
+    # Konsolidacja wszystkich subdomen i znalezienie żywych hostów po Etapie 1
     echo -e "\n${BLUE}Finalizuję etap 1 i sprawdzam żywe hosty...${NC}"
-    # First, consolidate all_subdomains.txt from temporary files
-    if [ -f "$all_subdomains_tmp" ]; then
-        sort -u "$all_subdomains_tmp" -o all_subdomains.txt
-    else
-        touch all_subdomains.txt
-    fi
 
-    # Consolidate found_urls.txt from temporary files
-    if [ -f "$found_urls_tmp" ]; then
-        sort -u "$found_urls_tmp" -o found_urls.txt
-    else
-        touch found_urls.txt
-    fi
+    # Skonsoliduj wszystkie tymczasowe pliki subdomen
+    find "$TMPDIR" -name "*_subdomains.tmp" -exec cat {} + 2>/dev/null | sort -u > "$TMPDIR/all_subdomains.tmp"
 
-    # Consolidate vhost_status_200.txt from temporary files
-    if [ -f "$vhost_status_200_tmp" ]; then
-        sort -u "$vhost_status_200_tmp" -o vhost_status_200.txt
-    else
-        touch vhost_status_200.txt
-    fi
-
-    echo -e "${BLUE}Unikalne subdomeny po etapie 1: ${GREEN}$(wc -l < all_subdomains.txt)${NC}"
+    echo -e "${BLUE}Unikalne subdomeny po etapie 1: ${GREEN}$(wc -l < "$TMPDIR/all_subdomains.tmp" 2>/dev/null || echo 0)${NC}"
     echo -e "${BLUE}Sprawdzam żywe hosty...${NC}"
-    # Ensure httpx runs and creates live_subdomains.txt before Stage 2 tools
-    if [ "$(wc -l < all_subdomains.txt)" -gt 0 ]; then
+    
+    # Upewnij się, że httpx działa i tworzy live_subdomains.tmp przed narzędziami Etapu 2
+    if [ -s "$TMPDIR/all_subdomains.tmp" ]; then # Sprawdź, czy plik nie jest pusty
         (
             # Użycie -silent w httpx, aby nie zaśmiecać wyjścia, jeśli nie jest w trybie cichym
-            if eval "httpx -l all_subdomains.txt -silent -threads $THREADS -timeout $TIMEOUT -o live_subdomains.txt $redir_output_val"; then
-                true # Success
+            if eval "httpx -l \"$TMPDIR/all_subdomains.tmp\" -silent -threads $THREADS -timeout $TIMEOUT -o \"$TMPDIR/live_subdomains.tmp\" $(get_redirection_string)"; then
+                true # Sukces
             else
                 echo -e "${RED}Błąd podczas uruchamiania httpx! Nie udało się znaleźć żywych hostów.${NC}" >&2
-                false # Failure
+                false # Niepowodzenie
             fi
         ) &
         httpx_pid=$!
         spinner_pid=$(start_spinner "Sprawdzanie żywych hostów" "$httpx_pid")
-        if ! wait "$httpx_pid"; then # Poprawiono htt_pid na httpx_pid
-            touch live_subdomains.txt
+        if ! wait "$httpx_pid"; then
+            touch "$TMPDIR/live_subdomains.tmp"
         fi
         kill "$spinner_pid" 2>/dev/null
     else
-        echo -e "${YELLOW}Brak subdomen do sprawdzenia za pomocą httpx. Tworzenie pustego pliku live_subdomains.txt.${NC}"
-        touch live_subdomains.txt
+        echo -e "${YELLOW}Brak subdomen do sprawdzenia za pomocą httpx. Tworzenie pustego pliku live_subdomains.tmp.${NC}"
+        touch "$TMPDIR/live_subdomains.tmp"
     fi
-    echo -e "${Blue}Żywe hosty: ${GREEN}$(wc -l < live_subdomains.txt)${NC}"
+    echo -e "${BLUE}Żywe hosty: ${GREEN}$(wc -l < "$TMPDIR/live_subdomains.tmp" 2>/dev/null || echo 0)${NC}"
+}
 
+# Etap 2: Crawling i wyszukiwanie parametrów
+crawl_stage() {
+    local domain=$1
+    local domain_part=$(echo "$domain" | cut -d':' -f1)
 
-    # --- Etap 2: Crawling i wyszukiwanie parametrów (wymaga żywych hostów) ---
-    echo -e "\n${BLUE}Rozpoczynam etap 2: Crawling i wyszukiwanie parametrów...${NC}"
+    echo -e "\n${BLUE}Rozpoczynam etap 2: Crawling i wyszukiwanie parametrów dla ${GREEN}$domain${NC}"
 
-    # Katana
-    if [ ${SELECTED[5]} -eq 1 ]; then
-        (
-            echo -e "${BLUE}[+] Katana${NC}"
-            if [ -f "live_subdomains.txt" ] && [ "$(wc -l < live_subdomains.txt)" -gt 0 ]; then
-                if eval "cat live_subdomains.txt | xargs -I {} -P $THREADS katana -u {} -o \"$katana_out\" -silent $redir_output_val"; then
-                    # Add to final all_subdomains.txt and found_urls.txt
-                    grep -Eo "([a-zA-Z0-9-]+\.)+$domain_part" "$katana_out" | sort -u >> all_subdomains.txt
-                    cat "$katana_out" >> found_urls.txt
-                else
-                    echo -e "${RED}Błąd podczas uruchamiania Katana!${NC}" >&2
-                fi
-            else
-                echo -e "${YELLOW}Brak żywych hostów do skanowania Katana lub plik live_subdomains.txt jest pusty.${NC}"
-            fi
-        ) &
-        pids_stage2+=($!)
-    fi
+    local pids_stage2=() # PIDs dla narzędzi crawlingu/wyszukiwania parametrów
 
-    # Hakrawler
-    if [ ${SELECTED[6]} -eq 1 ]; then
-        (
-            echo -e "${BLUE}[+] Hakrawler${NC}"
-            if [ -f "live_subdomains.txt" ] && [ "$(wc -l < live_subdomains.txt)" -gt 0 ]; then
-                if eval "cat live_subdomains.txt | xargs -I {} -P $THREADS echo {} | hakrawler $redir_output_val > \"$hakrawler_out\""; then
-                    # Add to final all_subdomains.txt and found_urls.txt
-                    grep -Eo "([a-zA-Z0-9-]+\.)+$domain_part" "$hakrawler_out" | sort -u >> all_subdomains.txt
-                    cat "$hakrawler_out" >> found_urls.txt
-                else
-                    echo -e "${RED}Błąd podczas uruchamiania Hakrawler!${NC}" >&2
-                fi
-            else
-                echo -e "${YELLOW}Brak żywych hostów do skanowania Hakrawler lub plik live_subdomains.txt jest pusty.${NC}"
-            fi
-        ) &
-        pids_stage2+=($!)
-    fi
+    for i in "${!TOOLS[@]}"; do
+        local tool_name="${TOOLS[$i]}"
+        local cmd_template="${TOOL_CMDS[$tool_name]}"
+        local output_file=""
+        local input_file=""
 
-    # Paramspider
-    if [ ${SELECTED[7]} -eq 1 ]; then
-        (
-            echo -e "${BLUE}[+] Paramspider${NC}"
-            # Usunięto problematyczne argumenty. Paramspider zazwyczaj wypisuje wyniki na stdout.
-            # Sprawdź `paramspider --help` dla dokładnych opcji w twojej wersji.
-            # Zamiast `--output \"$paramspider_out\" -q`, użyj przekierowania stdout.
-            if eval "paramspider -d \"$domain_part\" $redir_output_val > \"$paramspider_out\""; then
-                if [ -s "$paramspider_out" ]; then # Sprawdź, czy plik nie jest pusty
-                    # Paramspider domyślnie wypisuje URL-e.
-                    cat "$paramspider_out" | sort -u >> "$urls_with_params_tmp"
-                    # Add subdomains found by paramspider to all_subdomains.txt
-                    grep -Eo "([a-zA-Z0-9-]+\.)+$domain_part" "$urls_with_params_tmp" | sort -u >> all_subdomains.txt
-                else
-                    echo -e "${YELLOW}Ostrzeżenie: Plik wyjściowy Paramspider ($paramspider_out) jest pusty lub nie został utworzony poprawnie.${NC}" >&2
-                fi
-            else
-                echo -e "${RED}Błąd podczas uruchamiania Paramspider! Upewnij się, że jest zainstalowany i dostępny w PATH. Sprawdź logi Paramspider, jeśli występują błędy.${NC}" >&2
-            fi
-        ) &
-        pids_stage2+=($!)
-    fi
+        if [ ${SELECTED[$i]} -eq 1 ]; then
+            case "$tool_name" in
+                "Katana")
+                    echo -e "${BLUE}[+] Katana${NC}"
+                    output_file="$TMPDIR/katana_out.tmp"
+                    input_file="$TMPDIR/live_subdomains.tmp"
+                    if [ ! -s "$input_file" ]; then
+                        echo -e "${YELLOW}Brak żywych hostów do skanowania Katana lub plik live_subdomains.tmp jest pusty.${NC}"
+                        continue # Pomiń to narzędzie, jeśli brak danych wejściowych
+                    fi
+                    pids_stage2+=($(run_tool "$tool_name" "$cmd_template" "$output_file" "$input_file"))
+                    ;;
+                "Hakrawler")
+                    echo -e "${BLUE}[+] Hakrawler${NC}"
+                    output_file="$TMPDIR/hakrawler_out.tmp"
+                    input_file="$TMPDIR/live_subdomains.tmp"
+                    if [ ! -s "$input_file" ]; then
+                        echo -e "${YELLOW}Brak żywych hostów do skanowania Hakrawler lub plik live_subdomains.tmp jest pusty.${NC}"
+                        continue # Pomiń to narzędzie, jeśli brak danych wejściowych
+                    fi
+                    pids_stage2+=($(run_tool "$tool_name" "$cmd_template" "$output_file" "$input_file"))
+                    ;;
+                "Paramspider")
+                    echo -e "${BLUE}[+] Paramspider${NC}"
+                    output_file="$TMPDIR/paramspider_out.tmp"
+                    pids_stage2+=($(run_tool "$tool_name" "$cmd_template" "$output_file"))
+                    ;;
+                *)
+                    # Narzędzia niebędące częścią etapu crawlingu, lub już obsłużone
+                    ;;
+            esac
+        fi
+    done
 
-    # Wait for all Stage 2 processes to finish
+    # Poczekaj, aż wszystkie procesy Etapu 2 zakończą się
     if [ ${#pids_stage2[@]} -gt 0 ]; then
         spinner_pid=$(start_spinner "Etap 2: Crawling i parametry" "${pids_stage2[@]}")
         for pid in "${pids_stage2[@]}"; do
@@ -458,26 +477,114 @@ scan_domain() {
         kill "$spinner_pid" 2>/dev/null
     fi
 
-    # Consolidate urls_with_params.txt from temporary files
-    if [ -f "$urls_with_params_tmp" ]; then
-        sort -u "$urls_with_params_tmp" -o urls_with_params.txt
-    else
-        touch urls_with_params.txt
-    fi
-
     echo -ne "\r${GREEN}✓ Skanowanie zakończone!${NC}\n"
-
-    # Temporary files are cleaned up by the trap command on script exit
 }
 
-main() {
-    # Usuń stary log błędów i wszystkie pliki wyjściowe na początku
-    rm -f all_subdomains.txt live_subdomains.txt report.md vhost_status_200.txt found_urls.txt urls_with_params.txt "$ERROR_LOG"
-    # Upewnij się, że wszystkie pliki wyjściowe istnieją i są puste na początku, nawet jeśli nie zostaną użyte
-    touch all_subdomains.txt live_subdomains.txt found_urls.txt urls_with_params.txt vhost_status_200.txt "$ERROR_LOG"
+# Główna funkcja skanowania domeny
+scan_domain() {
+    local domain=$1
+    
+    # Podziel domenę i port (zmienne globalne dla run_tool)
+    domain_part=$(echo "$domain" | cut -d':' -f1)
+    port_part=$(echo "$domain" | grep -q ':' && echo "$domain" | cut -d':' -f2 || echo "")
 
-    # Parse command-line options
-    while getopts "u:f:w:t:T:hS" opt; do
+    # Uruchom etapy
+    recon_stage "$domain"
+    crawl_stage "$domain"
+
+    # Konsolidacja wyników z plików tymczasowych do plików docelowych
+    # Subdomeny
+    cat "$TMPDIR/ffuf_subdomains.tmp" "$TMPDIR/gobuster_vhost.tmp" "$TMPDIR/subfinder_subdomains.tmp" "$TMPDIR/amass_subdomains.tmp" "$TMPDIR/crtsh_subdomains.tmp" 2>/dev/null | sort -u >> "$OUTPUT_DIR/all_subdomains.txt"
+    
+    # Żywe hosty
+    if [ -f "$TMPDIR/live_subdomains.tmp" ]; then
+        cat "$TMPDIR/live_subdomains.tmp" >> "$OUTPUT_DIR/live_subdomains.txt"
+    fi
+
+    # Vhosty ze statusem 200 (z Gobuster)
+    if [ -f "$TMPDIR/gobuster_vhost.tmp" ]; then
+        # Gobuster vhost output contains "Found: subdomain.example.com (Status: 200)"
+        grep "Found:" "$TMPDIR/gobuster_vhost.tmp" | grep -i "status: 200" | cut -d' ' -f2 | sort -u >> "$OUTPUT_DIR/vhost_status_200.txt"
+    fi
+
+    # Znalezione URL-e (Waybackurls, Katana, Hakrawler)
+    cat "$TMPDIR/waybackurls_out.tmp" "$TMPDIR/katana_out.tmp" "$TMPDIR/hakrawler_out.tmp" 2>/dev/null | sort -u >> "$OUTPUT_DIR/found_urls.txt"
+
+    # URL-e z parametrami (Paramspider)
+    if [ -f "$TMPDIR/paramspider_out.tmp" ]; then
+        cat "$TMPDIR/paramspider_out.tmp" | sort -u >> "$OUTPUT_DIR/urls_with_params.txt"
+    fi
+}
+
+# Funkcja do generowania raportu JSON
+generate_json_report() {
+    local domain_for_report=$1 # Użyj tej zmiennej, aby uniknąć kolizji nazw
+    local report_file="$OUTPUT_DIR/report.json"
+
+    local all_subdomains_count=$(wc -l < "$OUTPUT_DIR/all_subdomains.txt" 2>/dev/null || echo 0)
+    local live_subdomains_count=$(wc -l < "$OUTPUT_DIR/live_subdomains.txt" 2>/dev/null || echo 0)
+    local vhost_200_count=$(wc -l < "$OUTPUT_DIR/vhost_status_200.txt" 2>/dev/null || echo 0)
+    local found_urls_count=$(wc -l < "$OUTPUT_DIR/found_urls.txt" 2>/dev/null || echo 0)
+    local urls_with_params_count=$(wc -l < "$OUTPUT_DIR/urls_with_params.txt" 2>/dev/null || echo 0)
+
+    local error_log_content=""
+    if [ -s "$ERROR_LOG" ]; then
+        # Wczytaj zawartość logu błędów i escapuj znaki specjalne dla JSON
+        error_log_content=$(cat "$ERROR_LOG" | sed 's/"/\\"/g' | sed ':a;N;s/\n/\\n/g;ta')
+    fi
+
+    local selected_tools_json=""
+    for i in "${!TOOLS[@]}"; do
+        if [ ${SELECTED[i]} -eq 1 ]; then
+            selected_tools_json+="\"${TOOLS[i]}\","
+        fi
+    done
+    selected_tools_json="${selected_tools_json%,}" # Usuń ostatni przecinek
+
+    cat <<EOF > "$report_file"
+{
+    "date": "$(date)",
+    "target": "$domain_for_report",
+    "used_tools": [${selected_tools_json}],
+    "results": {
+        "all_subdomains_count": $all_subdomains_count,
+        "live_subdomains_count": $live_subdomains_count,
+        "vhost_status_200_count": $vhost_200_count,
+        "found_urls_count": $found_urls_count,
+        "urls_with_params_count": $urls_with_params_count
+    },
+    "files": {
+        "all_subdomains": "$(basename "$OUTPUT_DIR/all_subdomains.txt")",
+        "live_subdomains": "$(basename "$OUTPUT_DIR/live_subdomains.txt")",
+        "vhost_status_200": "$(basename "$OUTPUT_DIR/vhost_status_200.txt")",
+        "found_urls": "$(basename "$OUTPUT_DIR/found_urls.txt")",
+        "urls_with_params": "$(basename "$OUTPUT_DIR/urls_with_params.txt")",
+        "error_log": "$(basename "$ERROR_LOG")"
+    },
+    "error_log_content": "$error_log_content"
+}
+EOF
+    echo -e "\n${GREEN}Raport JSON zapisany: $report_file${NC}"
+}
+
+
+main() {
+    # Usuń wszelkie pozostałe katalogi tymczasowe z poprzednich uruchomień
+    rm -rf /tmp/totalsubfinder_* 2>/dev/null
+
+    # Ustaw tymczasowy katalog i pułapkę na wyjście
+    TMPDIR=$(mktemp -d -t totalsubfinder_XXXXXX)
+    trap 'rm -rf "$TMPDIR"; echo -e "${BLUE}Wyczyszczono tymczasowy katalog: $TMPDIR${NC}"' EXIT
+
+    # Domyślny katalog wyjściowy
+    OUTPUT_DIR="./"
+
+    # Usuń stary log błędów na początku
+    rm -f "$ERROR_LOG"
+    touch "$ERROR_LOG" # Upewnij się, że plik logu błędów istnieje
+
+    # Parsowanie opcji wiersza poleceń
+    while getopts "u:f:w:t:T:hSjo:" opt; do
         case $opt in
             u) URL=$(clean_domain "$OPTARG") ;;
             f) DOMAINS_FILE="$OPTARG" ;;
@@ -485,88 +592,98 @@ main() {
             t) THREADS="$OPTARG" ;;
             T) TIMEOUT="$OPTARG" ;;
             h) 
-                echo "Usage: $0 [-u URL] [-f FILE] [-w WORDLIST] [-t THREADS] [-T TIMEOUT] [-S]"
-                echo "  -u URL       Target URL (e.g., example.com)"
-                echo "  -f FILE      File containing list of domains"
-                echo "  -w WORDLIST  Path to wordlist file (default: /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt)"
-                echo "  -t THREADS   Number of threads (default: 40)"
-                echo "  -T TIMEOUT   Timeout in seconds (default: 30)"
-                echo "  -S           Enable silent mode (suppress tool output)"
+                echo "Usage: $0 [-u URL] [-f FILE] [-w WORDLIST] [-t THREADS] [-T TIMEOUT] [-S] [-j] [-o OUTPUT_DIR]"
+                echo "  -u URL         Docelowy URL (np. example.com)"
+                echo "  -f FILE        Plik zawierający listę domen"
+                echo "  -w WORDLIST    Ścieżka do pliku listy słów (domyślnie: /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt)"
+                echo "  -t THREADS     Liczba wątków (domyślnie: 40)"
+                echo "  -T TIMEOUT     Limit czasu w sekundach (domyślnie: 30)"
+                echo "  -S             Włącz tryb cichy (pomija wyjście narzędzi)"
+                echo "  -j             Generuj raport JSON"
+                echo "  -o OUTPUT_DIR  Określ katalog wyjściowy"
+                echo ""
+                echo "Przykłady użycia:"
+                echo "  $0 -u example.com"
+                echo "  $0 -f domains.txt -j -o my_scan_results"
                 exit 0
                 ;;
             S) SILENT_MODE=1 ;;
+            j) JSON_OUTPUT=1 ;;
+            o) OUTPUT_DIR="$OPTARG"
+               mkdir -p "$OUTPUT_DIR" || { echo -e "${RED}Błąd: Nie można utworzyć katalogu wyjściowego: $OUTPUT_DIR${NC}" >&2; exit 1; }
+               ;;
             *) 
-                echo -e "${RED}Invalid option: -$OPTARG${NC}" >&2
-                echo "Usage: $0 [-u URL] [-f FILE] [-t THREADS] [-T TIMEOUT] [-S]" >&2
+                echo -e "${RED}Nieprawidłowa opcja: -$OPTARG${NC}" >&2
+                echo "Usage: $0 [-u URL] [-f FILE] [-t THREADS] [-T TIMEOUT] [-S] [-j] [-o OUTPUT_DIR]" >&2
                 exit 1
                 ;;
         esac
     done
 
     # Walidacja
-    [ -z "$URL" ] && [ -z "$DOMAINS_FILE" ] && { echo -e "${RED}Error: Provide domain (-u) or domains file (-f)${NC}" >&2; exit 1; }
-    [ -n "$DOMAINS_FILE" ] && [ ! -f "$DOMAINS_FILE" ] && { echo -e "${RED}Error: Domains file not found: $DOMAINS_FILE${NC}" >&2; exit 1; }
+    [ -z "$URL" ] && [ -z "$DOMAINS_FILE" ] && { echo -e "${RED}Błąd: Podaj domenę (-u) lub plik domen (-f)${NC}" >&2; exit 1; }
+    [ -n "$DOMAINS_FILE" ] && [ ! -f "$DOMAINS_FILE" ] && { echo -e "${RED}Błąd: Plik domen nie znaleziono: $DOMAINS_FILE${NC}" >&2; exit 1; }
 
     check_dependencies
     show_menu
 
+    # Upewnij się, że wszystkie pliki wyjściowe istnieją i są puste na początku w katalogu wyjściowym
+    touch "$OUTPUT_DIR/all_subdomains.txt" "$OUTPUT_DIR/live_subdomains.txt" "$OUTPUT_DIR/found_urls.txt" "$OUTPUT_DIR/urls_with_params.txt" "$OUTPUT_DIR/vhost_status_200.txt"
+
     # Przetwarzanie celów
     if [ -n "$DOMAINS_FILE" ]; then
-        while IFS= read -r domain || [ -n "$domain" ]; do
-            domain=$(clean_domain "$domain")
+        while IFS= read -r domain_entry || [ -n "$domain_entry" ]; do
+            domain=$(clean_domain "$domain_entry")
             is_valid_domain "$domain" && scan_domain "$domain"
         done < "$DOMAINS_FILE"
     else
         scan_domain "$URL"
     fi
 
-    # Final consolidation and sorting of main output files
-    sort -u all_subdomains.txt -o all_subdomains.txt
-    sort -u found_urls.txt -o found_urls.txt
-    sort -u urls_with_params.txt -o urls_with_params.txt
-    sort -u vhost_status_200.txt -o vhost_status_200.txt
-    sort -u live_subdomains.txt -o live_subdomains.txt
+    # Ostateczna konsolidacja i sortowanie głównych plików wyjściowych (na wypadek, gdyby coś zostało dodane w scan_domain)
+    sort -u "$OUTPUT_DIR/all_subdomains.txt" -o "$OUTPUT_DIR/all_subdomains.txt"
+    sort -u "$OUTPUT_DIR/found_urls.txt" -o "$OUTPUT_DIR/found_urls.txt"
+    sort -u "$OUTPUT_DIR/urls_with_params.txt" -o "$OUTPUT_DIR/urls_with_params.txt"
+    sort -u "$OUTPUT_DIR/vhost_status_200.txt" -o "$OUTPUT_DIR/vhost_status_200.txt"
+    sort -u "$OUTPUT_DIR/live_subdomains.txt" -o "$OUTPUT_DIR/live_subdomains.txt"
 
 
-    echo -e "\n${BLUE}Unikalne subdomeny: ${GREEN}$(wc -l < all_subdomains.txt)${NC}"
-    if [ ${SELECTED[1]} -eq 1 ] && [ -f "vhost_status_200.txt" ]; then
-        echo -e "${BLUE}Vhosty ze statusem 200: ${GREEN}$(wc -l < vhost_status_200.txt)${NC}"
+    echo -e "\n${BLUE}Unikalne subdomeny: ${GREEN}$(wc -l < "$OUTPUT_DIR/all_subdomains.txt" 2>/dev/null || echo 0)${NC}"
+    if [ ${SELECTED[1]} -eq 1 ] && [ -f "$OUTPUT_DIR/vhost_status_200.txt" ]; then
+        echo -e "${BLUE}Vhosty ze statusem 200: ${GREEN}$(wc -l < "$OUTPUT_DIR/vhost_status_200.txt" 2>/dev/null || echo 0)${NC}"
     fi
-    echo -e "${GREEN}Żywe hosty: $(wc -l < live_subdomains.txt)${NC}"
-    echo -e "${BLUE}Wszystkie znalezione URL-e (Waybackurls, Katana, Hakrawler): ${GREEN}$(wc -l < found_urls.txt)${NC}"
-    echo -e "${BLUE}URL-e z parametrami (Paramspider): ${GREEN}$(wc -l < urls_with_params.txt)${NC}"
+    echo -e "${GREEN}Żywe hosty: $(wc -l < "$OUTPUT_DIR/live_subdomains.txt" 2>/dev/null || echo 0)${NC}"
+    echo -e "${BLUE}Wszystkie znalezione URL-e (Waybackurls, Katana, Hakrawler): ${GREEN}$(wc -l < "$OUTPUT_DIR/found_urls.txt" 2>/dev/null || echo 0)${NC}"
+    echo -e "${BLUE}URL-e z parametrami (Paramspider): ${GREEN}$(wc -l < "$OUTPUT_DIR/urls_with_params.txt" 2>/dev/null || echo 0)${NC}"
 
 
-    # Generowanie raportu
+    # Generowanie raportu Markdown
     {
         echo "# Raport Subdomen"
         echo "**Data**: $(date)"
         echo "**Cel(e)**: ${URL:-$DOMAINS_FILE}"
         echo "**Użyte narzędzia**:"
-        [ ${SELECTED[0]} -eq 1 ] && echo "- FFUF"
-        [ ${SELECTED[1]} -eq 1 ] && echo "- Gobuster"
-        [ ${SELECTED[2]} -eq 1 ] && echo "- Subfinder"
-        [ ${SELECTED[3]} -eq 1 ] && echo "- Amass"
-        [ ${SELECTED[4]} -eq 1 ] && echo "- Waybackurls"
-        [ ${SELECTED[5]} -eq 1 ] && echo "- Katana"
-        [ ${SELECTED[6]} -eq 1 ] && echo "- Hakrawler"
-        [ ${SELECTED[7]} -eq 1 ] && echo "- Paramspider"
+        for i in "${!TOOLS[@]}"; do
+            if [ ${SELECTED[i]} -eq 1 ]; then
+                echo "- ${TOOLS[i]}"
+            fi
+        done
         echo "## Wyniki"
         echo "### Wszystkie subdomeny"
-        cat all_subdomains.txt | wc -l
+        wc -l < "$OUTPUT_DIR/all_subdomains.txt" 2>/dev/null || echo 0
         echo "### Żywe hosty"
-        cat live_subdomains.txt | wc -l
-        if [ ${SELECTED[1]} -eq 1 ] && [ -f "vhost_status_200.txt" ]; then
+        wc -l < "$OUTPUT_DIR/live_subdomains.txt" 2>/dev/null || echo 0
+        if [ ${SELECTED[1]} -eq 1 ] && [ -f "$OUTPUT_DIR/vhost_status_200.txt" ]; then
             echo "### Vhosty ze statusem 200"
-            cat vhost_status_200.txt | wc -l
+            wc -l < "$OUTPUT_DIR/vhost_status_200.txt" 2>/dev/null || echo 0
         fi
         if [ ${SELECTED[4]} -eq 1 ] || [ ${SELECTED[5]} -eq 1 ] || [ ${SELECTED[6]} -eq 1 ]; then
             echo "### Wszystkie znalezione URL-e"
-            cat found_urls.txt | wc -l
+            wc -l < "$OUTPUT_DIR/found_urls.txt" 2>/dev/null || echo 0
         fi
         if [ ${SELECTED[7]} -eq 1 ]; then
             echo "### URL-e z parametrami"
-            cat urls_with_params.txt | wc -l
+            wc -l < "$OUTPUT_DIR/urls_with_params.txt" 2>/dev/null || echo 0
         fi
         
         # Dodanie sekcji błędów do raportu
@@ -578,22 +695,26 @@ main() {
             echo "\`\`\`"
         fi
 
-    } > report.md
+    } > "$OUTPUT_DIR/report.md"
 
-    echo -e "\n${GREEN}Raport zapisany: report.md${NC}"
+    echo -e "\n${GREEN}Raport zapisany: $OUTPUT_DIR/report.md${NC}"
     echo -e "${BLUE}Wyniki:${NC}"
-    echo -e "• Wszystkie subdomeny: all_subdomains.txt"
-    echo -e "• Żywe hosty: live_subdomains.txt"
-    if [ ${SELECTED[1]} -eq 1 ] && [ -f "vhost_status_200.txt" ]; then
-        echo -e "• Vhosty: vhost_status_200.txt"
+    echo -e "• Wszystkie subdomeny: $OUTPUT_DIR/all_subdomains.txt"
+    echo -e "• Żywe hosty: $OUTPUT_DIR/live_subdomains.txt"
+    if [ ${SELECTED[1]} -eq 1 ] && [ -f "$OUTPUT_DIR/vhost_status_200.txt" ]; then
+        echo -e "• Vhosty: $OUTPUT_DIR/vhost_status_200.txt"
     fi
     if [ ${SELECTED[4]} -eq 1 ] || [ ${SELECTED[5]} -eq 1 ] || [ ${SELECTED[6]} -eq 1 ]; then
-        echo -e "• Wszystkie znalezione URL-e: found_urls.txt"
+        echo -e "• Wszystkie znalezione URL-e: $OUTPUT_DIR/found_urls.txt"
     fi
     if [ ${SELECTED[7]} -eq 1 ]; then
-        echo -e "• URL-e z parametrami: urls_with_params.txt"
+        echo -e "• URL-e z parametrami: $OUTPUT_DIR/urls_with_params.txt"
     fi
     echo -e "• Logi błędów: $ERROR_LOG"
+
+    if [ $JSON_OUTPUT -eq 1 ]; then
+        generate_json_report "${URL:-$(head -n 1 "$DOMAINS_FILE" 2>/dev/null || echo "N/A")}" # Użyj pierwszej domeny z pliku, jeśli podano plik
+    fi
 }
 
 main "$@"
