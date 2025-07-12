@@ -16,7 +16,7 @@ check_tool() {
 }
 
 # Lista wymaganych narzędzi do instalacji
-# ZMIANA: Dodano wszystkie narzędzia używane w totalsubfinder.sh
+# ZMIANA: Dodano wszystkie narzędzia używane w totalsubfinder
 TOOLS=("ffuf" "gobuster" "subfinder" "amass" "jq" "httpx" "waybackurls" "katana" "hakrawler" "paramspider")
 missing_tools=()
 
@@ -152,15 +152,15 @@ if [ ${#missing_tools[@]} -ne 0 ]; then
     fi
 fi
 
-if [ ! -f "totalsubfinder.sh" ]; then
-    echo -e "${RED}Plik 'totalsubfinder.sh' nie został znaleziony w bieżącym katalogu.${NC}"
+if [ ! -f "totalsubfinder" ]; then
+    echo -e "${RED}Plik 'totalsubfinder' nie został znaleziony w bieżącym katalogu.${NC}"
     exit 1
 fi
 
 install_dir="/usr/local/bin"
-echo -e "\n${BLUE}Instaluję 'totalsubfinder.sh' do: $install_dir (wymagane uprawnienia sudo)${NC}"
-if ! sudo mv totalsubfinder.sh "$install_dir/totalsubfinder"; then
-    echo -e "${RED}Nie udało się skopiować totalsubfinder.sh do $install_dir.${NC}"
+echo -e "\n${BLUE}Instaluję 'totalsubfinder' do: $install_dir (wymagane uprawnienia sudo)${NC}"
+if ! sudo mv totalsubfinder "$install_dir/totalsubfinder"; then
+    echo -e "${RED}Nie udało się skopiować totalsubfinder do $install_dir.${NC}"
     exit 1
 fi
 if ! sudo chmod +x "$install_dir/totalsubfinder"; then
