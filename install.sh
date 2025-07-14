@@ -116,8 +116,8 @@ install_dir="/usr/local/bin"
 cecho "${BLUE}" "Installing ShadowMap.sh to $install_dir"
 sudo cp ShadowMap.sh "$install_dir/" # Use cp instead of mv to preserve the original
 sudo chmod +x "$install_dir/ShadowMap.sh"
-sudo ln -s /usr/local/bin/shadowmap /usr/local/bin/sm
-cecho "${GREEN}" "✅ ShadowMap installed as 'shadowmap' and shortcut 'sm'""
+sudo ln -s /usr/local/bin/shadowmap /usr/local/bin/smp
+cecho "${GREEN}" "✅ ShadowMap installed as 'shadowmap' and shortcut 'smp'""
 
 # Amass and Subfinder configurations
 for tool in amass subfinder; do
