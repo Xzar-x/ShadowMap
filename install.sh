@@ -23,7 +23,9 @@ check_tool() {
 
 # Remove old httpx version (if it exists)
 sudo rm -f "$(which httpx 2>/dev/null || true)" || true # Added || true to avoid error if httpx does not exist
-sudo rm /usr/local/bin/smp
+if [ -f "/usr/local/bin/smp" ]; then
+    sudo rm "/usr/local/bin/smp"
+    fi
 
 # Updated list of required tools
 TOOLS=(ffuf gobuster subfinder amass jq httpx waybackurls katana hakrawler paramspider curl nmap)
@@ -116,7 +118,6 @@ install_dir="/usr/local/bin"
 cecho "${BLUE}" "Installing Shadowmap to $install_dir"
 sudo cp shadowmap "$install_dir/" # Use cp instead of mv to preserve the original
 sudo chmod +x "$install_dir/shadowmap"
-sudo ln -s /usr/local/bin/shadowmap /usr/local/bin/smp
 
 # Amass and Subfinder configurations
 for tool in amass subfinder; do
@@ -142,6 +143,6 @@ for tool in amass subfinder; do
         cp "$cfg_src" "$cfg_dest" && cecho "${GREEN}" "Configuration $tool installed." || cecho "${RED}" "Error installing $tool configuration."
     fi
 done
-
+sudo ln -s /usr/local/bin/shadowmap /usr/local/bin/smp
 cecho "${GREEN}" "Installation complete! Remember to fill in API keys in ~/.config/{amass,subfinder}/config.yaml ."
 cecho "${GREEN}" "ShadowMap installed as 'shadowmap' and shortcut 'smp'"
