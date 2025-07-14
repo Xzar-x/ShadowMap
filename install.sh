@@ -22,7 +22,6 @@ check_tool() {
 }
 
 # Remove old httpx version (if it exists)
-cecho "${BLUE}" "Removing old httpx version (if it exists)..."
 sudo rm -f "$(which httpx 2>/dev/null || true)" || true # Added || true to avoid error if httpx does not exist
 
 # Updated list of required tools
