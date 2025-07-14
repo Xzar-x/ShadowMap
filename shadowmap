@@ -242,19 +242,36 @@ show_menu() {
         print_title
         echo -e "${YELLOW}Select tools: [0-${#TOOLS[@]}] toggle main tools, [a/s/d] toggle Amass options, [e/f] toggle Nmap options, [q] toggle quiet mode, ENTER to continue${NC}"
         
-        # Display tools in two columns
         local num_tools=${#TOOLS[@]}
         local half_num=$(( (num_tools + 1) / 2 )) # Round up for the first column
-        local col_width=35 # Set column width for better alignment
+
+        # Calculate maximum visible length for the left column items
+        local max_left_col_visible_len=0
+        local left_col_display_strings=() # Array to hold visible strings for left column
+
+        for ((i=0; i<half_num; i++)); do
+            local status_char_for_calc=$( [ ${SELECTED[i]} -eq 1 ] && echo "✓" || echo "✗" )
+            # Construct the string exactly as it will be displayed (without color codes)
+            local visible_string="  [$i] ${status_char_for_calc} ${TOOLS[i]}"
+            left_col_display_strings+=("$visible_string")
+            local current_len=$(strip_ansi_codes "$visible_string" | wc -c)
+            if (( current_len > max_left_col_visible_len )); then
+                max_left_col_visible_len=$current_len
+            fi
+        done
+        # Add a bit of extra padding for separation between columns
+        local column_padding_width=$((max_left_col_visible_len + 2)) 
 
         for ((i=0; i<half_num; i++)); do
             local left_status_char=$( [ ${SELECTED[i]} -eq 1 ] && echo "✓" || echo "✗" )
             local left_color=$( [ ${SELECTED[i]} -eq 1 ] && echo "${GREEN}" || echo "${RED}" )
             
-            # Full text with ANSI codes
+            # Full text with ANSI codes for display
             local left_full_text="  ${left_color}[$i] ${left_status_char} ${TOOLS[i]}${NC}"
-            # Text without ANSI codes for length calculation
-            local left_display_text="  [$i] ${left_status_char} ${TOOLS[i]}"
+            
+            # Get the visible string for the current item (from the pre-calculated array)
+            local current_left_item_visible_string="${left_col_display_strings[i]}"
+            local current_left_item_visible_len=$(strip_ansi_codes "$current_left_item_visible_string" | wc -c)
             
             local right_full_text=""
             local right_index=$((i + half_num))
@@ -264,10 +281,9 @@ show_menu() {
                 right_full_text="  ${right_color}[$right_index] ${right_status_char} ${TOOLS[right_index]}${NC}"
             fi
             
-            # Calculate padding based on visible text length
-            local left_len=$(strip_ansi_codes "$left_full_text" | wc -c) # Use wc -c for character length
-            local padding=$(( col_width - left_len ))
-            if [ $padding -lt 1 ]; then padding=1; fi # Ensure at least one space
+            # Calculate padding based on the maximum length found
+            local padding=$(( column_padding_width - current_left_item_visible_len ))
+            if [ $padding -lt 0 ]; then padding=0; fi # Ensure padding is not negative
 
             # Display the row, applying colors and padding
             echo -e "${left_full_text}$(printf '%*s' "$padding" "")${right_full_text}"
@@ -275,7 +291,7 @@ show_menu() {
 
         # Amass options (more compact, on one line)
         if [ ${SELECTED[3]} -eq 1 ]; then
-            local passive_status=$( [ $AMASS_PASS-IVE -eq 1 ] && echo -e "${GREEN}on" || echo -e "${RED}off" )
+            local passive_status=$( [ $AMASS_PASSIVE -eq 1 ] && echo -e "${GREEN}on" || echo -e "${RED}off" )
             local brute_status=$( [ $AMASS_BRUTE -eq 1 ] && echo -e "${GREEN}on" || echo -e "${RED}off" )
             local active_status=$( [ $AMASS_ACTIVE -eq 1 ] && echo -e "${GREEN}on" || echo -e "${RED}off" )
             echo -e "  ${BLUE}Amass: ${YELLOW}[a]${BLUE}Passive:${passive_status} ${YELLOW}[s]${BLUE}Brute:${brute_status} ${YELLOW}[d]${BLUE}Active:${active_status}${NC}"
@@ -694,7 +710,7 @@ generate_json_report() {
             nmap_index=$idx
             break
         fi
-    }
+    done
 
     local nmap_output_files_json=""
     if [ "$nmap_index" -ne -1 ] && [ ${SELECTED[$nmap_index]} -eq 1 ] && [ -f "$OUTPUT_DIR/${domain_part}_nmap.nmap" ]; then
