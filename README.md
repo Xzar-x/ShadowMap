@@ -1,11 +1,11 @@
-\<p align="center"\>  
-\<img src="https://github.com/Xzar-x/images/blob/main/shadowmap.png" alt="ShadowMap Banner" width="100%"\>  
-\</p\>  
-\<h1 align="center"\>ShadowMap 🕵️‍♂️\</h1\>
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Xzar-x/images/main/shadowmap.png" alt="ShadowMap Banner" width="100%">
+</p>
+<h1 align="center">ShadowMap 🕵️‍♂️</h1>
 
-\<p align="center"\>  
-A fully automated, modular subdomain reconnaissance framework with \<strong\>stealth\</strong\> mode, error logging, JSON/Markdown reporting, and an interactive terminal UI.  
-\</p\>
+<p align="center">
+  A fully automated, modular subdomain reconnaissance framework with <strong>stealth</strong> mode, error logging, JSON/Markdown reporting, and an interactive terminal UI.
+</p>
 
 ## **🧠 What is ShadowMap?**
 
