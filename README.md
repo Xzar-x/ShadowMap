@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Xzar-x/images/main/shadowmap.png" alt="ShadowMap Banner" width="100%" height="150px">
+  <img src="https://raw.githubusercontent.com/Xzar-x/images/main/shadowmap.png" alt="ShadowMap Banner" width="100%" height="350px">
 </p>
 <h1 align="center">ShadowMap 🕵️‍♂️</h1>
 
