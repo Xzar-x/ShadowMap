@@ -1,0 +1,910 @@
+#!/bin/bash
+
+# Colors
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+RED='\033[0;31m'
+YELLOW='\033[0;33m'
+NC='\033[0m' # No Color - reset to default code
+
+# Default configuration
+URL=""
+DOMAINS_FILE=""
+WORDLIST="/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt"
+THREADS=40
+TIMEOUT=30
+
+# Global variables for domain and its parts (accessible across functions)
+# These are set in the scan_domain function for each processed target.
+domain=""
+domain_part=""
+port_part=""
+
+# Nmap options
+NMAP_LIGHT_SCAN=1 # Light scan enabled by default
+NMAP_DEEP_SCAN=0
+
+# Define tools and their display names for the menu
+TOOLS=(
+    "FFUF Subdomain"
+    "Gobuster Vhost"
+    "Subfinder"
+    "Amass (long scan)"
+    "Waybackurls"
+    "Katana"
+    "Hakrawler"
+    "Paramspider"
+    "CRT.sh" # New tool
+    "Nmap Scan" # Nmap added
+)
+
+# Default selection for all key subdomain enumeration tools
+SELECTED=(1 1 1 1 1 1 1 1 1 1) # All selected by default
+
+# Amass options
+AMASS_PASSIVE=1
+AMASS_BRUTE=0
+AMASS_ACTIVE=0
+
+# Global silent mode (0 = off, 1 = on)
+SILENT_MODE=0
+
+# Error log file
+ERROR_LOG="ShadowMap_error.log"
+
+# Output options
+JSON_OUTPUT=0
+OUTPUT_DIR="" # Default output directory is current
+
+# Temporary directory (set in main)
+TMPDIR=""
+
+# Global variable for Amass options, to be available in run_tool
+amass_opts_str=""
+
+# Associative array for tool commands
+# We use \$ to denote variables that will be expanded by expand_vars
+declare -A TOOL_CMDS=(
+  ["FFUF Subdomain"]="ffuf -u 'https://FUZZ.\$domain_part' -w '\$WORDLIST' -ic -t \$THREADS" # Base command, protocol will be changed dynamically
+  ["Gobuster Vhost"]="gobuster vhost -u 'http://\$domain' --append-domain -w '\$WORDLIST' -t \$THREADS"
+  ["Subfinder"]="subfinder -d '\$domain_part' -silent"
+  ["Amass (long scan)"]="amass enum \$amass_opts_str -d '\$domain_part' -json /dev/stdout --config '\$HOME/.config/amass/config.yaml'"
+  ["Waybackurls"]="waybackurls '\$domain_part'"
+  ["Katana"]="katana -silent" # Katana will use stdin from live_subdomains.tmp
+  ["Hakrawler"]="hakrawler" # Hakrawler will use stdin from live_subdomains.tmp
+  ["Paramspider"]="paramspider -d '\$domain_part'"
+  ["CRT.sh"]="curl -s 'https://crt.sh/?q=%25.\$domain_part&output=json' | jq -r '.[].common_name' | sed 's/^\*\.//g' | sort -u"
+  ["Nmap Scan"]="nmap" # Placeholder, command will be built dynamically
+)
+
+# Function to strip ANSI escape codes for length calculation
+strip_ansi_codes() {
+    echo "$1" | sed 's/\x1b\[[0-9;]*m//g'
+}
+
+# ASCII Art
+print_title() {
+  clear
+  cat <<\EOF
+   _____ __              __              __  ___          
+  / ___// /_  ____ _____/ /___ _      __/  |/  /___ _____ 
+  \__ \/ __ \/ __ `/ __  / __ \ | /| / / /|_/ / __ `/ __ \
+ ___/ / / / / /_/ / /_/ / /_/ / |/ |/ / /  / / /_/ / /_/ /
+/____/_/ /_/\__,_/\__,_/\____/|__/|__/_/  /_/\__,_/ .___/ 
+                                                 /_/     
+EOF
+    echo -e "${NC}"
+    echo -e "${BLUE}ShadowMap${NC} - Automated Reconnaissance Toolkit        ${GREEN}Made by Xzar${NC}\n"
+}
+
+# Function to return redirection string based on SILENT_MODE
+# Errors are always redirected to ERROR_LOG
+get_redirection_string() {
+    if [ $SILENT_MODE -eq 1 ]; then
+        echo ">/dev/null 2>> \"$ERROR_LOG\"" # Redirect stdout to null, stderr to error log
+    else
+        echo "2>> \"$ERROR_LOG\"" # Redirect stderr to error log
+    fi
+}
+
+# Helper function to expand variables in a string template
+# This function uses eval, but it's used in a controlled context
+# where the input template comes from hardcoded TOOL_CMDS and
+# variables are global and controlled.
+expand_vars() {
+    eval "echo \"$1\""
+}
+
+# Safely run a command, redirecting stderr to ERROR_LOG
+# Takes the command and its arguments as an array
+run_command_safely() {
+    local cmd=("$@")
+    # Redirect stderr to ERROR_LOG. stdout is handled by the caller (e.g., > "$output_file")
+    "${cmd[@]}" 2>> "$ERROR_LOG"
+}
+
+# Function to run a tool and monitor it with a spinner
+# Returns the PID of the subshell running the tool
+run_tool() {
+    local tool_name="$1"
+    local cmd_template="$2"
+    local output_file="$3" # Optional: file to redirect stdout to
+    local input_file="$4" # Optional: input file for tools (e.g., Katana, Hakrawler)
+
+    # Expand variables in the command template
+    local expanded_cmd_str=$(expand_vars "$cmd_template")
+
+    # Parse the expanded command string into an array for safe execution
+    # This is crucial for handling spaces and special characters within arguments
+    local cmd_array=()
+    read -ra cmd_array <<< "$expanded_cmd_str"
+
+    (
+        # Execute the command safely
+        if [ -n "$input_file" ]; then
+            if [ -n "$output_file" ]; then
+                run_command_safely "${cmd_array[@]}" < "$input_file" > "$output_file"
+            else
+                run_command_safely "${cmd_array[@]}" < "$input_file"
+            fi
+        else
+            if [ -n "$output_file" ]; then
+                run_command_safely "${cmd_array[@]}" > "$output_file"
+            else
+                run_command_safely "${cmd_array[@]}"
+            fi
+        fi
+    ) &
+    echo $! # Return the PID of the subshell running the tool
+}
+
+# Function to display a spinner animation in the background
+# It takes the PIDs of the processes to monitor and the message
+start_spinner() {
+    if [ $SILENT_MODE -eq 1 ]; then
+        return # Do not show spinner in silent mode
+    fi
+    local msg="$1" # First argument is the message
+    shift # Remove message from arguments, remaining are PIDs
+    local pids_to_monitor=("$@") # Get all remaining arguments as an array
+
+    ( # Run spinner in a subshell
+        local spin='-\|/'
+        local i=0
+        local all_done=0
+        local start_time=$(date +%s)
+        local timeout_seconds=600 # Spinner timeout after 10 minutes (600 seconds)
+
+        while [ "$all_done" -eq 0 ]; do
+            all_done=1
+            for pid in "${pids_to_monitor[@]}"; do
+                if kill -0 "$pid" 2>/dev/null; then # Check if PID is still running
+                    all_done=0
+                    break
+                fi
+            done
+            
+            local current_time=$(date +%s)
+            if (( current_time - start_time > timeout_seconds )); then
+                echo -ne "\r${RED}✗ ${msg} timed out (${timeout_seconds}s)!${NC}\n"
+                # Kill processes that timed out
+                for pid in "${pids_to_monitor[@]}"; do
+                    kill "$pid" 2>/dev/null
+                done
+                exit 1 # Exit spinner subshell
+            fi
+
+            i=$(( (i+1) % 4 ))
+            echo -ne "\r${YELLOW}${spin:$i:1} ${msg}...${NC}"
+            sleep 0.1
+        done
+        echo -ne "\r${GREEN}✓ ${msg} finished!${NC}\n"
+    ) &
+    echo $! # Return the PID of the spinner subshell
+}
+
+
+# Check dependencies
+check_dependencies() {
+    local missing=0
+    # Added 'httpx', 'jq', 'curl', and 'nmap' to the list of tools to check
+    local tools=("ffuf" "gobuster" "subfinder" "amass" "httpx" "jq" "waybackurls" "katana" "hakrawler" "curl" "nmap") 
+    
+    echo -e "${BLUE}Checking dependencies...${NC}"
+    for tool in "${tools[@]}"; do
+        if ! command -v "$tool" &> /dev/null; then
+            echo -e "${RED}Missing: $tool${NC}" >&2
+            missing=1
+        else
+            echo -e "${GREEN}Found: $tool${NC}"
+        fi
+    done
+
+    # Better check for paramspider
+    if ! command -v "paramspider" &> /dev/null; then 
+        echo -e "${RED}Missing: paramspider (ensure it's installed and in your PATH, e.g., /usr/local/bin/paramspider. Try 'pip install paramspider' or 'git clone https://github.com/0xasm0d3us/ParamSpider.git' and add to PATH.)${NC}" >&2
+        missing=1
+    else
+        echo -e "${GREEN}Found: paramspider${NC}"
+    fi
+    
+    if [ $missing -eq 1 ]; then
+        echo -e "\n${RED}Missing required tools. Please install them before continuing.${NC}" >&2
+        echo "Check $ERROR_LOG for details." # Information about the log file
+        exit 1
+    fi
+}
+
+# Main menu
+show_menu() {
+    clear # Clear screen once at the beginning of the menu
+    while true; do
+        print_title
+        echo -e "${YELLOW}Select tools: [1-${#TOOLS[@]}] toggle main tools, [a/b/d] toggle Amass options, [e/f] toggle Nmap options, [s] toggle silent mode, ENTER to continue${NC}"
+        
+        # Display tools in two columns
+        local num_tools=${#TOOLS[@]}
+        local half_num=$(( (num_tools + 1) / 2 )) # Round up for the first column
+        local col_width=35 # Set column width for better alignment
+
+        for ((i=0; i<half_num; i++)); do
+            local left_status_char=$( [ ${SELECTED[i]} -eq 1 ] && echo "✓" || echo "✗" )
+            local left_color=$( [ ${SELECTED[i]} -eq 1 ] && echo "${GREEN}" || echo "${RED}" )
+            
+            # Full text with ANSI codes
+            local left_full_text="  ${left_color}[$(($i+1))] ${left_status_char} ${TOOLS[i]}${NC}"
+            # Text without ANSI codes for length calculation
+            local left_display_text="  [$(($i+1))] ${left_status_char} ${TOOLS[i]}"
+            
+            local right_full_text=""
+            local right_index=$((i + half_num))
+            if [ $right_index -lt $num_tools ]; then
+                local right_status_char=$( [ ${SELECTED[right_index]} -eq 1 ] && echo "✓" || echo "✗" )
+                local right_color=$( [ ${SELECTED[right_index]} -eq 1 ] && echo "${GREEN}" || echo "${RED}" )
+                right_full_text="  ${right_color}[$(($right_index+1))] ${right_status_char} ${TOOLS[right_index]}${NC}"
+            fi
+            
+            # Calculate padding based on visible text length
+            local left_len=$(strip_ansi_codes "$left_full_text" | wc -c) # Use wc -c for character length
+            local padding=$(( col_width - left_len ))
+            if [ $padding -lt 1 ]; then padding=1; fi # Ensure at least one space
+
+            # Display the row, applying colors and padding
+            echo -e "${left_full_text}$(printf '%*s' "$padding" "")${right_full_text}"
+        done
+
+        # Amass options (more compact, on one line)
+        if [ ${SELECTED[3]} -eq 1 ]; then
+            local passive_status=$( [ $AMASS_PASSIVE -eq 1 ] && echo -e "${GREEN}on" || echo -e "${RED}off" )
+            local brute_status=$( [ $AMASS_BRUTE -eq 1 ] && echo -e "${GREEN}on" || echo -e "${RED}off" )
+            local active_status=$( [ $AMASS_ACTIVE -eq 1 ] && echo -e "${GREEN}on" || echo -e "${RED}off" )
+            echo -e "  ${BLUE}Amass: ${YELLOW}[a]${BLUE}Passive:${passive_status} ${YELLOW}[b]${BLUE}Brute:${brute_status} ${YELLOW}[d]${BLUE}Active:${active_status}${NC}"
+        else
+            echo -e "  (Amass options disabled)"
+        fi
+
+        # Find Nmap Scan index dynamically
+        local nmap_index=-1
+        for idx in "${!TOOLS[@]}"; do
+            if [[ "${TOOLS[$idx]}" == "Nmap Scan" ]]; then
+                nmap_index=$idx
+                break
+            fi
+        done
+
+        # Add Nmap options to the menu if Nmap is selected
+        if [ "$nmap_index" -ne -1 ] && [ ${SELECTED[$nmap_index]} -eq 1 ]; then
+            local light_status=$( [ $NMAP_LIGHT_SCAN -eq 1 ] && echo -e "${GREEN}on" || echo -e "${RED}off" )
+            local deep_status=$( [ $NMAP_DEEP_SCAN -eq 1 ] && echo -e "${GREEN}on" || echo -e "${RED}off" )
+            echo -e "  ${BLUE}Nmap: ${YELLOW}[e]${BLUE}Light:${light_status} ${YELLOW}[f]${BLUE}Deep:${deep_status}${NC}"
+        else
+            echo -e "  (Nmap options disabled)"
+        fi
+
+        echo -e "${BLUE}Current settings:${NC}"
+        # Display settings on fewer lines
+        local domain_display="${URL:-$DOMAINS_FILE}"
+        echo -e "  Domain: ${GREEN}${domain_display}${NC}"
+        echo -e "  Wordlist: ${GREEN}${WORDLIST}${NC}"
+        echo -e "  Threads: ${GREEN}${THREADS}${NC}, Timeout: ${GREEN}${TIMEOUT}s${NC}"
+        
+        if [ $SILENT_MODE -eq 1 ]; then
+            echo -e "  ${GREEN}[s] Silent mode: enabled${NC}"
+        else
+            echo -e "  ${NC}${RED}[s] Silent mode: disabled${NC}"
+        fi
+
+        if [ -n "$OUTPUT_DIR" ]; then
+            echo -e "  ${BLUE}Output directory: ${GREEN}${OUTPUT_DIR}${NC}"
+        fi
+        if [ $JSON_OUTPUT -eq 1 ]; then
+            echo -e "  ${BLUE}JSON output: enabled${NC}"
+        fi
+        
+        echo -e "Press 1-${#TOOLS[@]} to toggle tools, a/b/d for Amass options, e/f for Nmap options, s for silent mode, ENTER to start"
+
+        read -sn1 key
+        [[ -z "$key" ]] && break
+        
+        if [[ "$key" =~ ^[0-9]+$ ]] && [ "$key" -ge 1 ] && [ "$key" -le "${#TOOLS[@]}" ]; then
+            index=$((key-1))
+            SELECTED[$index]=$((1 - SELECTED[$index]))
+        elif [[ "$key" == "a" && ${SELECTED[3]} -eq 1 ]]; then
+            AMASS_PASSIVE=$((1 - AMASS_PASSIVE))
+        elif [[ "$key" == "b" && ${SELECTED[3]} -eq 1 ]]; then
+            AMASS_BRUTE=$((1 - AMASS_BRUTE))
+        elif [[ "$key" == "s" ]]; then
+            SILENT_MODE=$((1 - SILENT_MODE))
+        elif [[ "$key" == "d" && ${SELECTED[3]} -eq 1 ]]; then
+            AMASS_ACTIVE=$((1 - AMASS_ACTIVE))
+        elif [[ "$key" == "e" ]] && [ "$nmap_index" -ne -1 ] && [ ${SELECTED[$nmap_index]} -eq 1 ]; then
+            NMAP_LIGHT_SCAN=$((1 - NMAP_LIGHT_SCAN))
+            [ $NMAP_LIGHT_SCAN -eq 1 ] && NMAP_DEEP_SCAN=0 # Ensure they are mutually exclusive
+        elif [[ "$key" == "f" ]] && [ "$nmap_index" -ne -1 ] && [ ${SELECTED[$nmap_index]} -eq 1 ]; then
+            NMAP_DEEP_SCAN=$((1 - NMAP_DEEP_SCAN))
+            [ $NMAP_DEEP_SCAN -eq 1 ] && NMAP_LIGHT_SCAN=0 # Ensure they are mutually exclusive
+        fi
+        clear # Clear screen before re-drawing the menu in the next iteration
+    done
+}
+
+# Domain validation
+validate_domain() {
+    # Improved domain validation that also handles ports
+    local domain_to_check="$1"
+    # Remove protocol and path to check only the domain part
+    domain_to_check=$(echo "$domain_to_check" | sed -e 's|^[^/]*//||' -e 's|/.*$||')
+
+    # Regex for domain (without port)
+    local domain_regex='^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$'
+    
+    # Check if it contains a port
+    local domain_part_no_port=$(echo "$domain_to_check" | cut -d':' -f1)
+    local port_part_only=$(echo "$domain_to_check" | grep -q ':' && echo "$domain_to_check" | cut -d':' -f2 || echo "")
+
+    if [[ ! "$domain_part_no_port" =~ $domain_regex ]]; then
+        echo -e "${RED}Invalid domain format: $1${NC}" >&2
+        return 1
+    fi
+
+    # Validate port, if it exists
+    if [ -n "$port_part_only" ]; then
+        if ! [[ "$port_part_only" =~ ^[0-9]+$ ]] || (( port_part_only < 1 )) || (( port_part_only > 65535 )); then
+            echo -e "${RED}Invalid port format in domain: $1${NC}" >&2
+            return 1
+        fi
+    fi
+    return 0
+}
+
+clean_domain() {
+    echo "$1" | sed -e 's|^[^/]*//||' -e 's|/.*$||' -e 's/^www\.//'
+}
+
+# Stage 1: Subdomain Enumeration
+recon_stage() {
+    echo -e "${BLUE}Starting Stage 1: Subdomain Enumeration for ${GREEN}$domain${NC}"
+
+    local pids_stage1=() # PIDs for subdomain enumeration tools
+
+    # Configure Amass options (must be done before any Amass call)
+    local amass_opts=()
+    if [ $AMASS_PASSIVE -eq 0 ] && [ $AMASS_BRUTE -eq 0 ] && [ $AMASS_ACTIVE -eq 0 ]; then
+        AMASS_PASSIVE=1
+    fi
+    [ $AMASS_PASSIVE -eq 1 ] && amass_opts+=("-passive")
+    [ $AMASS_BRUTE -eq 1 ] && amass_opts+=("-brute")
+    [ $AMASS_ACTIVE -eq 1 ] && amass_opts+=("-active")
+    amass_opts_str="${amass_opts[@]}" # Set global variable
+
+    for i in "${!TOOLS[@]}"; do
+        local tool_name="${TOOLS[$i]}"
+        local cmd_template="${TOOL_CMDS[$tool_name]}"
+        local output_file=""
+        local input_file="" # Not used in this stage, but for consistency
+
+        if [ ${SELECTED[$i]} -eq 1 ]; then
+            case "$tool_name" in
+                "FFUF Subdomain")
+                    echo -e "${BLUE}[+] FFUF Subdomain${NC}"
+                    local protocol="https://"
+                    [ -n "$port_part" ] && protocol="http://"
+                    # Construct FFUF command dynamically due to protocol dependency
+                    cmd_template="ffuf -u \"${protocol}FUZZ.$domain_part\" -w \"\$WORDLIST\" -ic -t \$THREADS"
+                    output_file="$TMPDIR/ffuf_subdomains.tmp"
+                    pids_stage1+=($(run_tool "$tool_name" "$cmd_template" "$output_file"))
+                    ;;
+                "Gobuster Vhost")
+                    echo -e "${BLUE}[+] Gobuster Vhost${NC}"
+                    output_file="$TMPDIR/gobuster_vhost.tmp"
+                    pids_stage1+=($(run_tool "$tool_name" "$cmd_template" "$output_file"))
+                    ;;
+                "Subfinder")
+                    echo -e "${BLUE}[+] Subfinder${NC}"
+                    output_file="$TMPDIR/subfinder_subdomains.tmp"
+                    pids_stage1+=($(run_tool "$tool_name" "$cmd_template" "$output_file"))
+                    ;;
+                "Amass (long scan)")
+                    echo -e "${BLUE}[+] Amass${NC}"
+                    output_file="$TMPDIR/amass_subdomains.tmp"
+                    pids_stage1+=($(run_tool "$tool_name" "$cmd_template" "$output_file"))
+                    ;;
+                "CRT.sh")
+                    echo -e "${BLUE}[+] CRT.sh${NC}"
+                    output_file="$TMPDIR/crtsh_subdomains.tmp"
+                    pids_stage1+=($(run_tool "$tool_name" "$cmd_template" "$output_file"))
+                    ;;
+                "Waybackurls")
+                    echo -e "${BLUE}[+] Waybackurls${NC}"
+                    output_file="$TMPDIR/waybackurls_out.tmp"
+                    pids_stage1+=($(run_tool "$tool_name" "$cmd_template" "$output_file"))
+                    ;;
+                *)
+                    # Tools not part of the recon stage, or already handled
+                    ;;
+            esac
+        fi
+    done
+
+    # Wait for all Stage 1 processes to finish
+    if [ ${#pids_stage1[@]} -gt 0 ]; then
+        spinner_pid=$(start_spinner "Stage 1: Subdomain Enumeration" "${pids_stage1[@]}")
+        for pid in "${pids_stage1[@]}"; do
+            wait "$pid" || true
+        done
+        kill "$spinner_pid" 2>/dev/null
+    fi
+
+    # Consolidate all subdomains and find live hosts after Stage 1
+    echo -e "\n${BLUE}Finalizing Stage 1 and checking for live hosts...${NC}"
+
+    # Consolidate all temporary subdomain files
+    find "$TMPDIR" -name "*_subdomains.tmp" -exec cat {} + 2>/dev/null | sort -u > "$TMPDIR/all_subdomains.tmp"
+
+    echo -e "${BLUE}Unique subdomains after Stage 1: ${GREEN}$(wc -l < "$TMPDIR/all_subdomains.tmp" 2>/dev/null || echo 0)${NC}"
+    echo -e "${BLUE}Checking for live hosts...${NC}"
+    
+    # Ensure httpx runs and creates live_subdomains.tmp before Stage 2 tools
+    if [ -s "$TMPDIR/all_subdomains.tmp" ]; then # Check if file is not empty
+        (
+            # Use -silent in httpx to avoid cluttering output if not in silent mode
+            if run_tool "httpx" "httpx -l \"\$TMPDIR/all_subdomains.tmp\" -silent -threads \$THREADS -timeout \$TIMEOUT -o \"\$TMPDIR/live_subdomains.tmp\""; then
+                true # Success
+            else
+                echo -e "${RED}Error running httpx! Failed to find live hosts.${NC}" >&2
+                false # Failure
+            fi
+        ) &
+        httpx_pid=$!
+        spinner_pid=$(start_spinner "Checking live hosts" "$httpx_pid")
+        if ! wait "$httpx_pid"; then
+            touch "$TMPDIR/live_subdomains.tmp"
+        fi
+        kill "$spinner_pid" 2>/dev/null
+    else
+        echo -e "${YELLOW}No subdomains to check with httpx. Creating empty live_subdomains.tmp.${NC}"
+        touch "$TMPDIR/live_subdomains.tmp"
+    fi
+    echo -e "${BLUE}Live hosts: ${GREEN}$(wc -l < "$TMPDIR/live_subdomains.tmp" 2>/dev/null || echo 0)${NC}"
+}
+
+# Stage 2: Crawling and Parameter Discovery
+crawl_stage() {
+    echo -e "\n${BLUE}Starting Stage 2: Crawling and Parameter Discovery for ${GREEN}$domain${NC}"
+
+    local pids_stage2=() # PIDs for crawling/parameter discovery tools
+
+    for i in "${!TOOLS[@]}"; do
+        local tool_name="${TOOLS[$i]}"
+        local cmd_template="${TOOL_CMDS[$tool_name]}"
+        local output_file=""
+        local input_file=""
+
+        if [ ${SELECTED[$i]} -eq 1 ]; then
+            case "$tool_name" in
+                "Katana")
+                    echo -e "${BLUE}[+] Katana${NC}"
+                    output_file="$TMPDIR/katana_out.tmp"
+                    input_file="$TMPDIR/live_subdomains.tmp"
+                    if [ ! -s "$input_file" ]; then
+                        echo -e "${YELLOW}No live hosts to scan with Katana or live_subdomains.tmp is empty.${NC}"
+                        continue # Skip this tool if no input data
+                    fi
+                    pids_stage2+=($(run_tool "$tool_name" "$cmd_template" "$output_file" "$input_file"))
+                    ;;
+                "Hakrawler")
+                    echo -e "${BLUE}[+] Hakrawler${NC}"
+                    output_file="$TMPDIR/hakrawler_out.tmp"
+                    input_file="$TMPDIR/live_subdomains.tmp"
+                    if [ ! -s "$input_file" ]; then
+                        echo -e "${YELLOW}No live hosts to scan with Hakrawler or live_subdomains.tmp is empty.${NC}"
+                        continue # Skip this tool if no input data
+                    fi
+                    pids_stage2+=($(run_tool "$tool_name" "$cmd_template" "$output_file" "$input_file"))
+                    ;;
+                "Paramspider")
+                    echo -e "${BLUE}[+] Paramspider${NC}"
+                    output_file="$TMPDIR/paramspider_out.tmp"
+                    pids_stage2+=($(run_tool "$tool_name" "$cmd_template" "$output_file"))
+                    ;;
+                *)
+                    # Tools not part of the crawling stage, or already handled
+                    ;;
+            esac
+        fi
+    done
+
+    # Wait for all Stage 2 processes to finish
+    if [ ${#pids_stage2[@]} -gt 0 ]; then
+        spinner_pid=$(start_spinner "Stage 2: Crawling and Parameters" "${pids_stage2[@]}")
+        for pid in "${pids_stage2[@]}"; do
+            wait "$pid" || true
+        done
+        kill "$spinner_pid" 2>/dev/null
+    fi
+
+    echo -ne "\r${GREEN}✓ Crawling finished!${NC}\n"
+}
+
+# Stage 3: Port Scanning (Nmap)
+port_scan_stage() {
+    echo -e "\n${BLUE}Starting Stage 3: Port Scanning (Nmap) for ${GREEN}$domain${NC}"
+
+    local pids_stage3=() # PIDs for Nmap
+
+    # Find Nmap Scan index dynamically
+    local nmap_index=-1
+    for idx in "${!TOOLS[@]}"; do
+        if [[ "${TOOLS[$idx]}" == "Nmap Scan" ]]; then
+            nmap_index=$idx
+            break
+        fi
+    done
+
+    if [ "$nmap_index" -ne -1 ] && [ ${SELECTED[$nmap_index]} -eq 1 ]; then # Check if Nmap is selected
+        echo -e "${BLUE}[+] Nmap Scan${NC}"
+        if [ -s "$TMPDIR/live_subdomains.tmp" ]; then
+            local nmap_cmd_options=""
+            local nmap_timing_template="-T4" # Default T4 (aggressive)
+
+            if [ $NMAP_DEEP_SCAN -eq 1 ]; then
+                nmap_cmd_options="-p- --script vuln"
+                nmap_timing_template="-T2" # Slower for deep scan
+            elif [ $NMAP_LIGHT_SCAN -eq 1 ]; then
+                nmap_cmd_options="-Pn -sC -sV"
+                nmap_timing_template="-T4"
+            else # Default if neither light nor deep is explicitly selected
+                nmap_cmd_options="-Pn -sC -sV"
+                nmap_timing_template="-T4"
+            fi
+            
+            # Use -iL for input file, -oA for all output formats
+            # Nmap command is built dynamically and passed to run_tool
+            local nmap_full_cmd="nmap -iL \"\$TMPDIR/live_subdomains.tmp\" \$nmap_timing_template \$nmap_cmd_options -oA \"\$OUTPUT_DIR/${domain_part}_nmap\""
+            
+            pids_stage3+=($(run_tool "Nmap Scan" "$nmap_full_cmd"))
+        else
+            echo -e "${YELLOW}No live hosts to scan with Nmap or live_subdomains.tmp is empty.${NC}"
+        fi
+    fi
+
+    # Wait for Nmap processes to finish
+    if [ ${#pids_stage3[@]} -gt 0 ]; then
+        spinner_pid=$(start_spinner "Stage 3: Port Scanning (Nmap)" "${pids_stage3[@]}")
+        for pid in "${pids_stage3[@]}"; do
+            wait "$pid" || true
+        done
+        kill "$spinner_pid" 2>/dev/null
+    fi
+    echo -ne "\r${GREEN}✓ Port scanning finished!${NC}\n"
+}
+
+
+# Main domain scanning function
+scan_domain() {
+    # Set global domain variables based on the current target
+    domain=$1
+    domain_part=$(echo "$domain" | cut -d':' -f1)
+    port_part=$(echo "$domain" | grep -q ':' && echo "$domain" | cut -d':' -f2 || echo "")
+
+    # Check if results for this domain already exist in the output directory
+    # We use the existence of the main all_subdomains.txt file as an indicator
+    if [ -s "$OUTPUT_DIR/all_subdomains.txt" ] && grep -q -E "^$domain_part$" "$OUTPUT_DIR/all_subdomains.txt"; then
+        echo -e "${YELLOW}Results for domain '$domain' likely already exist in '$OUTPUT_DIR'.${NC}"
+        echo -e "${YELLOW}Do you want to skip scanning this domain? (y/n)${NC}"
+        read -sn1 choice
+        echo # New line after choice
+        if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
+            echo -e "${YELLOW}Skipped scanning for '$domain'.${NC}"
+            return # Exit scan_domain function for this domain
+        else
+            echo -e "${YELLOW}Continuing scan for '$domain' (existing results will be overwritten).${NC}"
+            # Clean existing files for this domain to ensure a clean overwrite
+            # We use grep -v to remove only lines related to the current domain
+            sed -i "/^$domain_part$/d" "$OUTPUT_DIR/all_subdomains.txt" 2>/dev/null
+            sed -i "/^$domain_part$/d" "$OUTPUT_DIR/live_subdomains.txt" 2>/dev/null
+            # For found_urls and urls_with_params, which contain full URLs,
+            # we remove those that contain domain_part
+            sed -i "/$domain_part/d" "$OUTPUT_DIR/found_urls.txt" 2>/dev/null
+            sed -i "/$domain_part/d" "$OUTPUT_DIR/urls_with_params.txt" 2>/dev/null
+            sed -i "/$domain_part/d" "$OUTPUT_DIR/vhost_status_200.txt" 2>/dev/null
+
+            # Remove Nmap files for this domain
+            rm -f "$OUTPUT_DIR/${domain_part}_nmap.nmap" "$OUTPUT_DIR/${domain_part}_nmap.xml" "$OUTPUT_DIR/${domain_part}_nmap.gnmap" 2>/dev/null
+        fi
+    fi
+
+    recon_stage "$domain"
+    crawl_stage "$domain"
+    port_scan_stage "$domain" # New port scanning stage
+
+    # Consolidate results from temporary files to target files
+    # Subdomains
+    cat "$TMPDIR/ffuf_subdomains.tmp" "$TMPDIR/gobuster_vhost.tmp" "$TMPDIR/subfinder_subdomains.tmp" "$TMPDIR/amass_subdomains.tmp" "$TMPDIR/crtsh_subdomains.tmp" 2>/dev/null | sort -u >> "$OUTPUT_DIR/all_subdomains.txt"
+    
+    # Live hosts
+    if [ -f "$TMPDIR/live_subdomains.tmp" ]; then
+        cat "$TMPDIR/live_subdomains.tmp" >> "$OUTPUT_DIR/live_subdomains.txt"
+    fi
+
+    # Vhosts with status 200 (from Gobuster)
+    if [ -f "$TMPDIR/gobuster_vhost.tmp" ]; then
+        # Gobuster vhost output contains "Found: subdomain.example.com (Status: 200)"
+        grep "Found:" "$TMPDIR/gobuster_vhost.tmp" | grep -i "status: 200" | cut -d' ' -f2 | sort -u >> "$OUTPUT_DIR/vhost_status_200.txt"
+    fi
+
+    # Found URLs (Waybackurls, Katana, Hakrawler)
+    cat "$TMPDIR/waybackurls_out.tmp" "$TMPDIR/katana_out.tmp" "$TMPDIR/hakrawler_out.tmp" 2>/dev/null | sort -u >> "$OUTPUT_DIR/found_urls.txt"
+
+    # URLs with parameters (Paramspider)
+    if [ -f "$TMPDIR/paramspider_out.tmp" ]; then
+        cat "$TMPDIR/paramspider_out.tmp" | sort -u >> "$OUTPUT_DIR/urls_with_params.txt"
+    fi
+}
+
+# Function to generate JSON report
+generate_json_report() {
+    local domain_for_report=$1 # Use this variable to avoid name collision
+    local report_file="$OUTPUT_DIR/report.json"
+
+    local all_subdomains_count=$(wc -l < "$OUTPUT_DIR/all_subdomains.txt" 2>/dev/null || echo 0)
+    local live_subdomains_count=$(wc -l < "$OUTPUT_DIR/live_subdomains.txt" 2>/dev/null || echo 0)
+    local vhost_200_count=$(wc -l < "$OUTPUT_DIR/vhost_status_200.txt" 2>/dev/null || echo 0)
+    local found_urls_count=$(wc -l < "$OUTPUT_DIR/found_urls.txt" 2>/dev/null || echo 0)
+    local urls_with_params_count=$(wc -l < "$OUTPUT_DIR/urls_with_params.txt" 2>/dev/null || echo 0)
+
+    local error_log_content=""
+    if [ -s "$ERROR_LOG" ]; then
+        # Read error log content and escape special characters for JSON
+        error_log_content=$(cat "$ERROR_LOG" | sed 's/"/\\"/g' | sed ':a;N;s/\n/\\n/g;ta')
+    fi
+
+    local selected_tools_json=""
+    for i in "${!TOOLS[@]}"; do
+        if [ ${SELECTED[i]} -eq 1 ]; then
+            selected_tools_json+="\"${TOOLS[i]}\","
+        fi
+    done
+    selected_tools_json="${selected_tools_json%,}" # Remove trailing comma
+
+    # Find Nmap Scan index dynamically
+    local nmap_index=-1
+    for idx in "${!TOOLS[@]}"; do
+        if [[ "${TOOLS[$idx]}" == "Nmap Scan" ]]; then
+            nmap_index=$idx
+            break
+        fi
+    done
+
+    local nmap_output_files_json=""
+    if [ "$nmap_index" -ne -1 ] && [ ${SELECTED[$nmap_index]} -eq 1 ] && [ -f "$OUTPUT_DIR/${domain_part}_nmap.nmap" ]; then
+        nmap_output_files_json="\"${domain_part}_nmap.nmap\", \"${domain_part}_nmap.xml\", \"${domain_part}_nmap.gnmap\""
+    fi
+
+
+    cat <<EOF > "$report_file"
+{
+    "date": "$(date)",
+    "target": "$domain_for_report",
+    "used_tools": [${selected_tools_json}],
+    "results": {
+        "all_subdomains_count": $all_subdomains_count,
+        "live_subdomains_count": $live_subdomains_count,
+        "vhost_status_200_count": $vhost_200_count,
+        "found_urls_count": $found_urls_count,
+        "urls_with_params_count": $urls_with_params_count
+    },
+    "files": {
+        "all_subdomains": "$(basename "$OUTPUT_DIR/all_subdomains.txt")",
+        "live_subdomains": "$(basename "$OUTPUT_DIR/live_subdomains.txt")",
+        "vhost_status_200": "$(basename "$OUTPUT_DIR/vhost_status_200.txt")",
+        "found_urls": "$(basename "$OUTPUT_DIR/found_urls.txt")",
+        "urls_with_params": "$(basename "$OUTPUT_DIR/urls_with_params.txt")",
+        "error_log": "$(basename "$ERROR_LOG")",
+        "nmap_output_files": [${nmap_output_files_json}]
+    },
+    "error_log_content": "$error_log_content"
+}
+EOF
+    echo -e "\n${GREEN}JSON report saved: $report_file${NC}"
+}
+
+
+main() {
+    # Remove any leftover temporary directories from previous runs
+    rm -rf /tmp/ShadowMap_* 2>/dev/null
+
+    # Set temporary directory and trap on exit
+    TMPDIR=$(mktemp -d -t ShadowMap_XXXXXX)
+    trap 'rm -rf "$TMPDIR"; echo -e "${BLUE}Cleaned up temporary directory: $TMPDIR${NC}"' EXIT
+
+    # Default output directory
+    OUTPUT_DIR="./"
+
+    # Remove old error log at the start and ensure the error log file exists
+    rm -f "$ERROR_LOG"
+    touch "$ERROR_LOG"
+
+    # Parse command-line options
+    while getopts "u:f:w:t:T:hSjo:" opt; do
+        case $opt in
+            u) URL=$(clean_domain "$OPTARG") ;;
+            f) DOMAINS_FILE="$OPTARG" ;;
+            w) WORDLIST="$OPTARG" ;;
+            t) THREADS="$OPTARG" ;;
+            T) TIMEOUT="$OPTARG" ;;
+            h) 
+                echo "Usage: $0 [-u URL] [-f FILE] [-w WORDLIST] [-t THREADS] [-T TIMEOUT] [-S] [-j] [-o OUTPUT_DIR]"
+                echo "  -u URL         Target URL (e.g., example.com)"
+                echo "  -f FILE        File containing list of domains"
+                echo "  -w WORDLIST    Path to wordlist file (default: /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt)"
+                echo "  -t THREADS     Number of threads (default: 40)"
+                echo "  -T TIMEOUT     Timeout in seconds (default: 30)"
+                echo "  -S             Enable silent mode (suppress tool output)"
+                echo "  -j             Generate JSON report"
+                echo "  -o OUTPUT_DIR  Specify output directory"
+                echo ""
+                echo "Usage examples:"
+                echo "  $0 -u example.com"
+                echo "  $0 -f domains.txt -j -o my_scan_results"
+                exit 0
+                ;;
+            S) SILENT_MODE=1 ;;
+            j) JSON_OUTPUT=1 ;;
+            o) OUTPUT_DIR="$OPTARG"
+               mkdir -p "$OUTPUT_DIR" || { echo -e "${RED}Error: Could not create output directory: $OUTPUT_DIR${NC}" >&2; exit 1; }
+               ;;
+            *) 
+                echo -e "${RED}Invalid option: -$OPTARG${NC}" >&2
+                echo "Usage: $0 [-u URL] [-f FILE] [-t THREADS] [-T TIMEOUT] [-S] [-j] [-o OUTPUT_DIR]" >&2
+                exit 1
+                ;;
+        esac
+    done
+
+    # Validation
+    [ -z "$URL" ] && [ -z "$DOMAINS_FILE" ] && { echo -e "${RED}Error: Provide domain (-u) or domains file (-f)${NC}" >&2; exit 1; }
+    [ -n "$DOMAINS_FILE" ] && [ ! -f "$DOMAINS_FILE" ] && { echo -e "${RED}Error: Domains file not found: $DOMAINS_FILE${NC}" >&2; exit 1; }
+    [ ! -f "$WORDLIST" ] && { echo -e "${RED}Error: Wordlist file not found: $WORDLIST${NC}" >&2; exit 1; }
+
+    check_dependencies
+    show_menu
+
+    # Process targets
+    if [ -n "$DOMAINS_FILE" ]; then
+        while IFS= read -r domain_entry || [ -n "$domain_entry" ]; do
+            domain_to_process=$(clean_domain "$domain_entry")
+            if validate_domain "$domain_to_process"; then
+                scan_domain "$domain_to_process"
+            else
+                echo -e "${RED}Skipped invalid domain: $domain_to_process${NC}" >&2
+            fi
+        done < "$DOMAINS_FILE"
+    else
+        if validate_domain "$URL"; then
+            scan_domain "$URL"
+        else
+            echo -e "${RED}Skipped invalid domain: $URL${NC}" >&2
+        fi
+    fi
+
+    # Final consolidation and sorting of main output files
+    # These operations are idempotent and safe to run at the end,
+    # even if some domains were skipped or overwritten.
+    sort -u "$OUTPUT_DIR/all_subdomains.txt" -o "$OUTPUT_DIR/all_subdomains.txt"
+    sort -u "$OUTPUT_DIR/found_urls.txt" -o "$OUTPUT_DIR/found_urls.txt"
+    sort -u "$OUTPUT_DIR/urls_with_params.txt" -o "$OUTPUT_DIR/urls_with_params.txt"
+    sort -u "$OUTPUT_DIR/vhost_status_200.txt" -o "$OUTPUT_DIR/vhost_status_200.txt"
+    sort -u "$OUTPUT_DIR/live_subdomains.txt" -o "$OUTPUT_DIR/live_subdomains.txt"
+
+
+    echo -e "\n${BLUE}Unique subdomains: ${GREEN}$(wc -l < "$OUTPUT_DIR/all_subdomains.txt" 2>/dev/null || echo 0)${NC}"
+    if [ ${SELECTED[1]} -eq 1 ] && [ -f "$OUTPUT_DIR/vhost_status_200.txt" ]; then
+        echo -e "${BLUE}Vhosts with status 200: ${GREEN}$(wc -l < "$OUTPUT_DIR/vhost_status_200.txt" 2>/dev/null || echo 0)${NC}"
+    fi
+    echo -e "${GREEN}Live hosts: $(wc -l < "$OUTPUT_DIR/live_subdomains.txt" 2>/dev/null || echo 0)${NC}"
+    echo -e "${BLUE}All found URLs (Waybackurls, Katana, Hakrawler): ${GREEN}$(wc -l < "$OUTPUT_DIR/found_urls.txt" 2>/dev/null || echo 0)${NC}"
+    echo -e "${BLUE}URLs with parameters (Paramspider): ${GREEN}$(wc -l < "$OUTPUT_DIR/urls_with_params.txt" 2>/dev/null || echo 0)${NC}"
+
+
+    # Generate Markdown report
+    {
+        echo "# Subdomain Report"
+        echo "**Date**: $(date)"
+        echo "**Target(s)**: ${URL:-$DOMAINS_FILE}"
+        echo "**Tools Used**:"
+        for i in "${!TOOLS[@]}"; do
+            if [ ${SELECTED[i]} -eq 1 ]; then
+                echo "- ${TOOLS[i]}"
+            fi
+        done
+        echo "## Results"
+        echo "### All Subdomains"
+        wc -l < "$OUTPUT_DIR/all_subdomains.txt" 2>/dev/null || echo 0
+        echo "### Live Hosts"
+        wc -l < "$OUTPUT_DIR/live_subdomains.txt" 2>/dev/null || echo 0
+        if [ ${SELECTED[1]} -eq 1 ] && [ -f "$OUTPUT_DIR/vhost_status_200.txt" ]; then
+            echo "### Vhosts with status 200"
+            wc -l < "$OUTPUT_DIR/vhost_status_200.txt" 2>/dev/null || echo 0
+        fi
+        if [ ${SELECTED[4]} -eq 1 ] || [ ${SELECTED[5]} -eq 1 ] || [ ${SELECTED[6]} -eq 1 ]; then
+            echo "### All Found URLs"
+            wc -l < "$OUTPUT_DIR/found_urls.txt" 2>/dev/null || echo 0
+        fi
+        if [ ${SELECTED[7]} -eq 1 ]; then
+            echo "### URLs with Parameters"
+            wc -l < "$OUTPUT_DIR/urls_with_params.txt" 2>/dev/null || echo 0
+        fi
+        
+        # Find Nmap Scan index dynamically
+        local nmap_index=-1
+        for idx in "${!TOOLS[@]}"; do
+            if [[ "${TOOLS[$idx]}" == "Nmap Scan" ]]; then
+                nmap_index=$idx
+                break
+            fi
+        done
+
+        if [ "$nmap_index" -ne -1 ] && [ ${SELECTED[$nmap_index]} -eq 1 ] && [ -f "$OUTPUT_DIR/${domain_part}_nmap.nmap" ]; then
+            echo "### Nmap Scan Results"
+            echo "Detailed Nmap results can be found in the following files:"
+            echo "- ${domain_part}_nmap.nmap"
+            echo "- ${domain_part}_nmap.xml"
+            echo "- ${domain_part}_nmap.gnmap"
+        fi
+
+        # Add error log section to the report
+        if [ -s "$ERROR_LOG" ]; then # Only if the file is not empty
+            echo "## Error Logs"
+            echo "Below are errors encountered during tool execution. Please check '$ERROR_LOG' for full details."
+            echo "\`\`\`"
+            cat "$ERROR_LOG"
+            echo "\`\`\`"
+        fi
+
+    } > "$OUTPUT_DIR/report.md"
+
+    echo -e "\n${GREEN}Report saved: $OUTPUT_DIR/report.md${NC}"
+    echo -e "${BLUE}Results:${NC}"
+    echo -e "• All subdomains: $OUTPUT_DIR/all_subdomains.txt"
+    echo -e "• Live hosts: $OUTPUT_DIR/live_subdomains.txt"
+    if [ ${SELECTED[1]} -eq 1 ] && [ -f "$OUTPUT_DIR/vhost_status_200.txt" ]; then
+        echo -e "• Vhosts: $OUTPUT_DIR/vhost_status_200.txt"
+    fi
+    if [ ${SELECTED[4]} -eq 1 ] || [ ${SELECTED[5]} -eq 1 ] || [ ${SELECTED[6]} -eq 1 ]; then
+        echo -e "• All found URLs: $OUTPUT_DIR/found_urls.txt"
+    fi
+    if [ ${SELECTED[7]} -eq 1 ]; then
+        echo -e "• URLs with parameters: $OUTPUT_DIR/urls_with_params.txt"
+    fi
+    if [ "$nmap_index" -ne -1 ] && [ ${SELECTED[$nmap_index]} -eq 1 ] && [ -f "$OUTPUT_DIR/${domain_part}_nmap.nmap" ]; then
+        echo -e "• Nmap results: ${domain_part}_nmap.nmap, ${domain_part}_nmap.xml, ${domain_part}_nmap.gnmap"
+    fi
+    echo -e "• Error logs: $ERROR_LOG"
+
+    if [ $JSON_OUTPUT -eq 1 ]; then
+        generate_json_report "${URL:-$(head -n 1 "$DOMAINS_FILE" 2>/dev/null || echo "N/A")}" # Use the first domain from the file if a file is provided
+    fi
+}
+
+main "$@"
