@@ -22,6 +22,7 @@ check_tool() {
 }
 
 # Remove old httpx version (if it exists)
+cecho "${BLUE}" "Removing old httpx version (if it exists)..."
 sudo rm -f "$(which httpx 2>/dev/null || true)" || true # Added || true to avoid error if httpx does not exist
 
 # Updated list of required tools
@@ -116,7 +117,7 @@ cecho "${BLUE}" "Installing ShadowMap to $install_dir"
 sudo cp ShadowMap "$install_dir/" # Use cp instead of mv to preserve the original
 sudo chmod +x "$install_dir/ShadowMap"
 sudo ln -s /usr/local/bin/shadowmap /usr/local/bin/smp
-cecho "${GREEN}" "✅ ShadowMap installed as 'shadowmap' and shortcut 'smp'""
+cecho "${GREEN}" "✅ ShadowMap installed as 'shadowmap' and shortcut 'smp'"
 
 # Amass and Subfinder configurations
 for tool in amass subfinder; do
