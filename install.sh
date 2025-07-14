@@ -22,8 +22,8 @@ check_tool() {
 }
 
 # Remove old httpx version (if it exists)
-cecho "${BLUE}" "Removing old httpx version (if it exists)..."
 sudo rm -f "$(which httpx 2>/dev/null || true)" || true # Added || true to avoid error if httpx does not exist
+sudo rm /usr/local/bin/smp
 
 # Updated list of required tools
 TOOLS=(ffuf gobuster subfinder amass jq httpx waybackurls katana hakrawler paramspider curl nmap)
