@@ -144,4 +144,4 @@ for tool in amass subfinder; do
 done
 
 cecho "${GREEN}" "Installation complete! Remember to fill in API keys in ~/.config/{amass,subfinder}/config.yaml (if using these tools)."
-cecho "${GREEN}" "✅ ShadowMap installed as 'shadowmap' and shortcut 'smp'""
+cecho "${GREEN}" "✅ ShadowMap installed as 'shadowmap' and shortcut 'smp'"
