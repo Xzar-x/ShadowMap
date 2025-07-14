@@ -46,8 +46,8 @@ AMASS_PASSIVE=1
 AMASS_BRUTE=0
 AMASS_ACTIVE=0
 
-# Global silent mode (0 = off, 1 = on)
-SILENT_MODE=0
+# Global quiet mode (0 = off, 1 = on)
+QUIET_MODE=0
 
 # Error log file
 ERROR_LOG="ShadowMap_error.log"
@@ -97,10 +97,10 @@ EOF
     echo -e "${BLUE}ShadowMap${NC} - Automated Reconnaissance Toolkit        ${GREEN}Made by Xzar${NC}\n"
 }
 
-# Function to return redirection string based on SILENT_MODE
+# Function to return redirection string based on QUIET_MODE
 # Errors are always redirected to ERROR_LOG
 get_redirection_string() {
-    if [ $SILENT_MODE -eq 1 ]; then
+    if [ $QUIET_MODE -eq 1 ]; then
         echo ">/dev/null 2>> \"$ERROR_LOG\"" # Redirect stdout to null, stderr to error log
     else
         echo "2>> \"$ERROR_LOG\"" # Redirect stderr to error log
@@ -161,8 +161,8 @@ run_tool() {
 # Function to display a spinner animation in the background
 # It takes the PIDs of the processes to monitor and the message
 start_spinner() {
-    if [ $SILENT_MODE -eq 1 ]; then
-        return # Do not show spinner in silent mode
+    if [ $QUIET_MODE -eq 1 ]; then
+        return # Do not show spinner in quiet mode
     fi
     local msg="$1" # First argument is the message
     shift # Remove message from arguments, remaining are PIDs
@@ -240,7 +240,7 @@ show_menu() {
     clear # Clear screen once at the beginning of the menu
     while true; do
         print_title
-        echo -e "${YELLOW}Select tools: [1-${#TOOLS[@]}] toggle main tools, [a/b/d] toggle Amass options, [e/f] toggle Nmap options, [s] toggle silent mode, ENTER to continue${NC}"
+        echo -e "${YELLOW}Select tools: [0-${#TOOLS[@]}] toggle main tools, [a/s/d] toggle Amass options, [e/f] toggle Nmap options, [q] toggle quiet mode, ENTER to continue${NC}"
         
         # Display tools in two columns
         local num_tools=${#TOOLS[@]}
@@ -252,16 +252,16 @@ show_menu() {
             local left_color=$( [ ${SELECTED[i]} -eq 1 ] && echo "${GREEN}" || echo "${RED}" )
             
             # Full text with ANSI codes
-            local left_full_text="  ${left_color}[$(($i+1))] ${left_status_char} ${TOOLS[i]}${NC}"
+            local left_full_text="  ${left_color}[$i] ${left_status_char} ${TOOLS[i]}${NC}"
             # Text without ANSI codes for length calculation
-            local left_display_text="  [$(($i+1))] ${left_status_char} ${TOOLS[i]}"
+            local left_display_text="  [$i] ${left_status_char} ${TOOLS[i]}"
             
             local right_full_text=""
             local right_index=$((i + half_num))
             if [ $right_index -lt $num_tools ]; then
                 local right_status_char=$( [ ${SELECTED[right_index]} -eq 1 ] && echo "✓" || echo "✗" )
                 local right_color=$( [ ${SELECTED[right_index]} -eq 1 ] && echo "${GREEN}" || echo "${RED}" )
-                right_full_text="  ${right_color}[$(($right_index+1))] ${right_status_char} ${TOOLS[right_index]}${NC}"
+                right_full_text="  ${right_color}[$right_index] ${right_status_char} ${TOOLS[right_index]}${NC}"
             fi
             
             # Calculate padding based on visible text length
@@ -275,10 +275,10 @@ show_menu() {
 
         # Amass options (more compact, on one line)
         if [ ${SELECTED[3]} -eq 1 ]; then
-            local passive_status=$( [ $AMASS_PASSIVE -eq 1 ] && echo -e "${GREEN}on" || echo -e "${RED}off" )
+            local passive_status=$( [ $AMASS_PASS-IVE -eq 1 ] && echo -e "${GREEN}on" || echo -e "${RED}off" )
             local brute_status=$( [ $AMASS_BRUTE -eq 1 ] && echo -e "${GREEN}on" || echo -e "${RED}off" )
             local active_status=$( [ $AMASS_ACTIVE -eq 1 ] && echo -e "${GREEN}on" || echo -e "${RED}off" )
-            echo -e "  ${BLUE}Amass: ${YELLOW}[a]${BLUE}Passive:${passive_status} ${YELLOW}[b]${BLUE}Brute:${brute_status} ${YELLOW}[d]${BLUE}Active:${active_status}${NC}"
+            echo -e "  ${BLUE}Amass: ${YELLOW}[a]${BLUE}Passive:${passive_status} ${YELLOW}[s]${BLUE}Brute:${brute_status} ${YELLOW}[d]${BLUE}Active:${active_status}${NC}"
         else
             echo -e "  (Amass options disabled)"
         fi
@@ -308,10 +308,10 @@ show_menu() {
         echo -e "  Wordlist: ${GREEN}${WORDLIST}${NC}"
         echo -e "  Threads: ${GREEN}${THREADS}${NC}, Timeout: ${GREEN}${TIMEOUT}s${NC}"
         
-        if [ $SILENT_MODE -eq 1 ]; then
-            echo -e "  ${GREEN}[s] Silent mode: enabled${NC}"
+        if [ $QUIET_MODE -eq 1 ]; then
+            echo -e "  ${GREEN}[q] Quiet mode: enabled${NC}"
         else
-            echo -e "  ${NC}${RED}[s] Silent mode: disabled${NC}"
+            echo -e "  ${NC}${RED}[q] Quiet mode: disabled${NC}"
         fi
 
         if [ -n "$OUTPUT_DIR" ]; then
@@ -321,20 +321,20 @@ show_menu() {
             echo -e "  ${BLUE}JSON output: enabled${NC}"
         fi
         
-        echo -e "Press 1-${#TOOLS[@]} to toggle tools, a/b/d for Amass options, e/f for Nmap options, s for silent mode, ENTER to start"
+        echo -e "Press 0-${#TOOLS[@]} to toggle tools, a/s/d for Amass options, e/f for Nmap options, q for quiet mode, ENTER to start"
 
         read -sn1 key
         [[ -z "$key" ]] && break
         
-        if [[ "$key" =~ ^[0-9]+$ ]] && [ "$key" -ge 1 ] && [ "$key" -le "${#TOOLS[@]}" ]; then
-            index=$((key-1))
+        if [[ "$key" =~ ^[0-9]+$ ]] && [ "$key" -ge 0 ] && [ "$key" -lt "${#TOOLS[@]}" ]; then
+            index=$key
             SELECTED[$index]=$((1 - SELECTED[$index]))
         elif [[ "$key" == "a" && ${SELECTED[3]} -eq 1 ]]; then
             AMASS_PASSIVE=$((1 - AMASS_PASSIVE))
-        elif [[ "$key" == "b" && ${SELECTED[3]} -eq 1 ]]; then
+        elif [[ "$key" == "s" && ${SELECTED[3]} -eq 1 ]]; then
             AMASS_BRUTE=$((1 - AMASS_BRUTE))
-        elif [[ "$key" == "s" ]]; then
-            SILENT_MODE=$((1 - SILENT_MODE))
+        elif [[ "$key" == "q" ]]; then
+            QUIET_MODE=$((1 - QUIET_MODE))
         elif [[ "$key" == "d" && ${SELECTED[3]} -eq 1 ]]; then
             AMASS_ACTIVE=$((1 - AMASS_ACTIVE))
         elif [[ "$key" == "e" ]] && [ "$nmap_index" -ne -1 ] && [ ${SELECTED[$nmap_index]} -eq 1 ]; then
@@ -467,7 +467,7 @@ recon_stage() {
     # Ensure httpx runs and creates live_subdomains.tmp before Stage 2 tools
     if [ -s "$TMPDIR/all_subdomains.tmp" ]; then # Check if file is not empty
         (
-            # Use -silent in httpx to avoid cluttering output if not in silent mode
+            # Use -silent in httpx to avoid cluttering output if not in quiet mode
             if run_tool "httpx" "httpx -l \"\$TMPDIR/all_subdomains.tmp\" -silent -threads \$THREADS -timeout \$TIMEOUT -o \"\$TMPDIR/live_subdomains.tmp\""; then
                 true # Success
             else
@@ -694,7 +694,7 @@ generate_json_report() {
             nmap_index=$idx
             break
         fi
-    done
+    }
 
     local nmap_output_files_json=""
     if [ "$nmap_index" -ne -1 ] && [ ${SELECTED[$nmap_index]} -eq 1 ] && [ -f "$OUTPUT_DIR/${domain_part}_nmap.nmap" ]; then
@@ -746,7 +746,7 @@ main() {
     touch "$ERROR_LOG"
 
     # Parse command-line options
-    while getopts "u:f:w:t:T:hSjo:" opt; do
+    while getopts "u:f:w:t:T:hQjo:" opt; do
         case $opt in
             u) URL=$(clean_domain "$OPTARG") ;;
             f) DOMAINS_FILE="$OPTARG" ;;
@@ -754,13 +754,13 @@ main() {
             t) THREADS="$OPTARG" ;;
             T) TIMEOUT="$OPTARG" ;;
             h) 
-                echo "Usage: $0 [-u URL] [-f FILE] [-w WORDLIST] [-t THREADS] [-T TIMEOUT] [-S] [-j] [-o OUTPUT_DIR]"
+                echo "Usage: $0 [-u URL] [-f FILE] [-w WORDLIST] [-t THREADS] [-T TIMEOUT] [-Q] [-j] [-o OUTPUT_DIR]"
                 echo "  -u URL         Target URL (e.g., example.com)"
                 echo "  -f FILE        File containing list of domains"
                 echo "  -w WORDLIST    Path to wordlist file (default: /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt)"
                 echo "  -t THREADS     Number of threads (default: 40)"
                 echo "  -T TIMEOUT     Timeout in seconds (default: 30)"
-                echo "  -S             Enable silent mode (suppress tool output)"
+                echo "  -Q             Enable quiet mode (suppress tool output)"
                 echo "  -j             Generate JSON report"
                 echo "  -o OUTPUT_DIR  Specify output directory"
                 echo ""
@@ -769,14 +769,14 @@ main() {
                 echo "  $0 -f domains.txt -j -o my_scan_results"
                 exit 0
                 ;;
-            S) SILENT_MODE=1 ;;
+            Q) QUIET_MODE=1 ;;
             j) JSON_OUTPUT=1 ;;
             o) OUTPUT_DIR="$OPTARG"
                mkdir -p "$OUTPUT_DIR" || { echo -e "${RED}Error: Could not create output directory: $OUTPUT_DIR${NC}" >&2; exit 1; }
                ;;
             *) 
                 echo -e "${RED}Invalid option: -$OPTARG${NC}" >&2
-                echo "Usage: $0 [-u URL] [-f FILE] [-t THREADS] [-T TIMEOUT] [-S] [-j] [-o OUTPUT_DIR]" >&2
+                echo "Usage: $0 [-u URL] [-f FILE] [-t THREADS] [-T TIMEOUT] [-Q] [-j] [-o OUTPUT_DIR]" >&2
                 exit 1
                 ;;
         esac
