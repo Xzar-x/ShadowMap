@@ -106,16 +106,16 @@ if [ ${#missing[@]} -gt 0 ]; then
 fi
 
 # Check for ShadowMap.sh file
-if [ ! -f ShadowMap.sh ]; then # Changed file name to ShadowMap.sh
-    cecho "${RED}" "Missing ShadowMap.sh file in the working directory. Ensure the main script is in the same directory as the installer."
+if [ ! -f ShadowMap ]; then # Changed file name to ShadowMap.sh
+    cecho "${RED}" "Missing ShadowMap file in the working directory. Ensure the main script is in the same directory as the installer."
     exit 1
 fi
 
 # Install the binary
 install_dir="/usr/local/bin"
-cecho "${BLUE}" "Installing ShadowMap.sh to $install_dir"
-sudo cp ShadowMap.sh "$install_dir/" # Use cp instead of mv to preserve the original
-sudo chmod +x "$install_dir/ShadowMap.sh"
+cecho "${BLUE}" "Installing ShadowMap to $install_dir"
+sudo cp ShadowMap "$install_dir/" # Use cp instead of mv to preserve the original
+sudo chmod +x "$install_dir/ShadowMap"
 sudo ln -s /usr/local/bin/shadowmap /usr/local/bin/smp
 cecho "${GREEN}" "✅ ShadowMap installed as 'shadowmap' and shortcut 'smp'""
 
@@ -145,4 +145,4 @@ for tool in amass subfinder; do
 done
 
 cecho "${GREEN}" "Installation complete! Remember to fill in API keys in ~/.config/{amass,subfinder}/config.yaml (if using these tools)."
-cecho "${BLUE}" "You can now run the script by typing: ShadowMap.sh"
+cecho "${GREEN}" "✅ ShadowMap installed as 'shadowmap' and shortcut 'smp'""
