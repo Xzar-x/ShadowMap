@@ -25,10 +25,10 @@ check_tool() {
 sudo rm -f "$(which httpx 2>/dev/null || true)" || true # Added || true to avoid error if httpx does not exist
 if [ -f "/usr/local/bin/smp" ]; then
     sudo rm "/usr/local/bin/smp"
-    fi
+fi
 
-# Updated list of required tools
-TOOLS=(ffuf gobuster subfinder amass jq httpx waybackurls katana hakrawler paramspider curl nmap)
+# Updated list of required tools, including nuclei and gau
+TOOLS=(ffuf gobuster subfinder amass jq httpx waybackurls katana hakrawler paramspider curl nmap nuclei gau)
 missing=()
 
 cecho "${BLUE}" "Checking required tools..."
@@ -43,9 +43,9 @@ for t in "${TOOLS[@]}"; do
 done
 
 # If Go-based tools are missing, inform about Go
-if printf '%s\n' "${missing[@]}" | grep -Eq 'subfinder|httpx|waybackurls|katana|hakrawler'; then
+if printf '%s\n' "${missing[@]}" | grep -Eq 'subfinder|httpx|waybackurls|katana|hakrawler|nuclei|gau'; then
     if ! check_tool go; then
-        cecho "${YELLOW}" "Note: Go is not installed. It is needed for: subfinder, httpx, waybackurls, katana, hakrawler."
+        cecho "${YELLOW}" "Note: Go is not installed. It is needed for: subfinder, httpx, waybackurls, katana, hakrawler, nuclei, gau."
     fi
 fi
 
@@ -62,28 +62,13 @@ if [ ${#missing[@]} -gt 0 ]; then
         for t in "${missing[@]}"; do
             cecho "${BLUE}" "Installing $t..."
             case "$t" in
-                ffuf|gobuster|amass|jq|curl|nmap) # Added curl and nmap
+                ffuf|gobuster|amass|jq|curl|nmap)
                     sudo apt install -y "$t" || cecho "${RED}" "Error installing $t. Try installing manually."
                     ;;
-                subfinder)
+                subfinder|httpx|waybackurls|katana|hakrawler|nuclei|gau) # Group Go-based tools
                     if check_tool go; then
-                        go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest \
-                          || cecho "${RED}" "go install subfinder failed. Try installing via apt or manually."
-                    else
-                        sudo apt install -y subfinder || cecho "${RED}" "Error installing subfinder. Install Go or try manually."
-                    fi
-                    ;;
-                httpx)
-                    if check_tool go; then
-                        go install github.com/projectdiscovery/httpx/cmd/httpx@latest \
-                          || cecho "${RED}" "go install httpx failed. Try installing via apt or manually."
-                    else
-                        cecho "${YELLOW}" "You need Go to install httpx. Try installing Go, then run the script again."
-                    fi
-                    ;;
-                waybackurls|katana|hakrawler)
-                    if check_tool go; then
-                        go install "github.com/tomnomnom/$t@latest" \
+                        go install "github.com/projectdiscovery/$t/cmd/$t@latest" \
+                          || go install "github.com/tomnomnom/$t@latest" \
                           || cecho "${RED}" "go install $t failed. Try installing manually."
                     else
                         cecho "${YELLOW}" "You need Go to install $t. Try installing Go, then run the script again."
@@ -108,7 +93,7 @@ if [ ${#missing[@]} -gt 0 ]; then
 fi
 
 # Check for ShadowMap.sh file
-if [ ! -f shadowmap ]; then # Changed file name to ShadowMap.sh
+if [ ! -f shadowmap ]; then
     cecho "${RED}" "Missing ShadowMap file in the working directory. Ensure the main script is in the same directory as the installer."
     exit 1
 fi
@@ -143,6 +128,14 @@ for tool in amass subfinder; do
         cp "$cfg_src" "$cfg_dest" && cecho "${GREEN}" "Configuration $tool installed." || cecho "${RED}" "Error installing $tool configuration."
     fi
 done
+
+# Nuclei templates configuration (new)
+if check_tool nuclei; then
+    cecho "${BLUE}" "Updating Nuclei templates..."
+    nuclei -update-templates || cecho "${YELLOW}" "Failed to update Nuclei templates. Try running 'nuclei -update-templates' manually."
+fi
+
+
 sudo ln -s /usr/local/bin/shadowmap /usr/local/bin/smp
 cecho "${GREEN}" "Installation complete! Remember to fill in API keys in ~/.config/{amass,subfinder}/config.yaml ."
 cecho "${GREEN}" "ShadowMap installed as 'shadowmap' and shortcut 'smp'"
