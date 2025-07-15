@@ -27,8 +27,8 @@ if [ -f "/usr/local/bin/smp" ]; then
     sudo rm "/usr/local/bin/smp"
 fi
 
-# Updated list of required tools, including nuclei and gau
-TOOLS=(ffuf gobuster subfinder amass jq httpx waybackurls katana hakrawler paramspider curl nmap nuclei gau)
+# Updated list of required tools, including nuclei and gau and bc
+TOOLS=(ffuf gobuster subfinder amass jq httpx waybackurls katana hakrawler paramspider curl nmap nuclei gau bc)
 missing=()
 
 cecho "${BLUE}" "Checking required tools..."
@@ -62,7 +62,7 @@ if [ ${#missing[@]} -gt 0 ]; then
         for t in "${missing[@]}"; do
             cecho "${BLUE}" "Installing $t..."
             case "$t" in
-                ffuf|gobuster|amass|jq|curl|nmap)
+                ffuf|gobuster|amass|jq|curl|nmap|bc) # Added bc here for apt install
                     sudo apt install -y "$t" || cecho "${RED}" "Error installing $t. Try installing manually."
                     ;;
                 subfinder) # Specific Go install path for subfinder
