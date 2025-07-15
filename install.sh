@@ -65,13 +65,44 @@ if [ ${#missing[@]} -gt 0 ]; then
                 ffuf|gobuster|amass|jq|curl|nmap)
                     sudo apt install -y "$t" || cecho "${RED}" "Error installing $t. Try installing manually."
                     ;;
-                subfinder|httpx|waybackurls|katana|hakrawler|nuclei|gau) # Group Go-based tools
+                subfinder) # Specific Go install path for subfinder
                     if check_tool go; then
-                        go install "github.com/projectdiscovery/$t/cmd/$t@latest" \
-                          || go install "github.com/tomnomnom/$t@latest" \
+                        go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest \
+                          || cecho "${RED}" "go install subfinder failed. Try installing via apt or manually."
+                    else
+                        cecho "${YELLOW}" "You need Go to install subfinder. Try installing Go, then run the script again."
+                    fi
+                    ;;
+                httpx) # Specific Go install path for httpx
+                    if check_tool go; then
+                        go install github.com/projectdiscovery/httpx/cmd/httpx@latest \
+                          || cecho "${RED}" "go install httpx failed. Try installing via apt or manually."
+                    else
+                        cecho "${YELLOW}" "You need Go to install httpx. Try installing Go, then run the script again."
+                    fi
+                    ;;
+                waybackurls|katana|hakrawler) # Common Go install path for these
+                    if check_tool go; then
+                        go install "github.com/tomnomnom/$t@latest" \
                           || cecho "${RED}" "go install $t failed. Try installing manually."
                     else
                         cecho "${YELLOW}" "You need Go to install $t. Try installing Go, then run the script again."
+                    fi
+                    ;;
+                nuclei) # Specific Go install path for nuclei
+                    if check_tool go; then
+                        go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest \
+                          || cecho "${RED}" "go install nuclei failed. Try installing manually."
+                    else
+                        cecho "${YELLOW}" "You need Go to install nuclei. Try installing Go, then run the script again."
+                    fi
+                    ;;
+                gau) # Specific Go install path for gau
+                    if check_tool go; then
+                        go install github.com/lc/gau/v2/cmd/gau@latest \
+                          || cecho "${RED}" "go install gau failed. Try installing manually."
+                    else
+                        cecho "${YELLOW}" "You need Go to install gau. Try installing Go, then run the script again."
                     fi
                     ;;
                 paramspider)
@@ -140,5 +171,5 @@ sudo ln -s /usr/local/bin/shadowmap /usr/local/bin/smp
 cecho "${GREEN}" "Installation complete! Remember to fill in API keys in ~/.config/{amass,subfinder}/config.yaml ."
 cecho "${GREEN}" "ShadowMap installed as 'shadowmap' and shortcut 'smp'"
 
-# Add rehash at the end to ensure smp is immediately available
-rehash
+# No rehash needed for bash, PATH will be updated on next shell session or via hash -r
+# Removed: rehash
