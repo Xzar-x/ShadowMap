@@ -116,7 +116,7 @@ declare -A TOOL_CMDS=(
 ["Waybackurls"]="waybackurls '\$domain_part'" # Brak bezpośrednich flag dla opóźnienia/User-Agenta
 ["Katana"]="katana -silent -c \$THREADS \$KATANA_DELAY_OPT \$KATANA_UA_OPT"
 ["Hakrawler"]="hakrawler" # Brak bezpośrednich flag dla opóźnienia/User-Agenta
-["Paramspider"]="paramspider -d '\$domain_part'" # Brak bezpośrednich flag dla opóźnienia/User-Agenta
+["Paramspider"]="paramspider -d '\$domain_part'" # Brak bezpośrednich flag dla opóżyienia/User-Agenta
 ["CRT.sh"]="curl -s \$CURL_UA_OPT 'https://crt.sh/?q=%25.\$domain_part&output=json' | jq -r '.[].common_name' | sed 's/^\*\.//g' | sort -u"
 ["Nmap Scan"]="nmap" # Placeholder, komenda będzie budowana dynamicznie w port_scan_stage
 ["Nuclei Scan"]="nuclei -l \$input_file -t ~/nuclei-templates/ -silent -o \$output_file \$NUCLEI_DELAY_OPT \$NUCLEI_UA_OPT"
@@ -412,6 +412,15 @@ check_dependencies () {
     else
         echo -e "${GREEN} Znaleziono: paramspider${NC}"
     fi
+
+    # Dodatkowe sprawdzenie dla 'getopt'
+    if ! command -v "getopt" &>/dev/null; then
+        echo -e "${RED} Brak: getopt (wymagane do parsowania argumentów wiersza poleceń).${NC}" >&2
+        missing=1
+    else
+        echo -e "${GREEN} Znaleziono: getopt${NC}"
+    fi
+
 
     if [ "$missing" -eq 1 ]; then
         echo -e "\n${RED} Brak wymaganych narzędzi. Zainstaluj je przed kontynuowaniem.${NC}" >&2
@@ -1058,17 +1067,33 @@ main() {
     local opt_threads_val=""
     local opt_timeout_val=""
 
-    # Parsuj opcje wiersza poleceń
-    # Użyj OPTIND=1 aby zresetować getopts dla kolejnych wywołań w pętli lub funkcji
-    OPTIND=1
-    while getopts "u:f:w:t:T:hQjo:" opt; do
-        case $opt in
-            u) URL=$(clean_domain "$OPTARG") ;;
-            f) DOMAINS_FILE="$OPTARG" ;;
-            w) WORDLIST="$OPTARG" ;;
-            t) opt_threads_val="$OPTARG" ;; # Przechowaj wartość -t
-            T) opt_timeout_val="$OPTARG" ;; # Przechowaj wartość -T
-            h)
+    # --- NOWA SEKCJA PARSOWANIA OPCJI Z UŻYCIEM GETOPT ---
+    # Definicja krótkich i długich opcji
+    local short_opts="u:f:w:t:T:hQjo:"
+    local long_opts="rl:,stealth"
+
+    # Parsuj opcje za pomocą getopt
+    # Użycie `eval set -- "$(...)"` jest standardową i bezpieczną metodą
+    # do prawidłowego przetwarzania wyjścia getopt.
+    local PARSED_OPTIONS
+    PARSED_OPTIONS=$(getopt -o "$short_opts" --long "$long_opts" -- "$@")
+
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}Błąd: Nieprawidłowe użycie opcji. Sprawdź pomoc ($0 -h).${NC}" >&2
+        exit 1
+    fi
+
+    eval set -- "$PARSED_OPTIONS"
+
+    # Przetwarzaj sparsowane opcje
+    while true; do
+        case "$1" in
+            -u) URL=$(clean_domain "$2"); shift 2 ;;
+            -f) DOMAINS_FILE="$2"; shift 2 ;;
+            -w) WORDLIST="$2"; shift 2 ;;
+            -t) opt_threads_val="$2"; shift 2 ;;
+            -T) opt_timeout_val="$2"; shift 2 ;;
+            -h)
                 clear
                 print_title
                 echo -e "${BLUE}Użycie:${NC} ${GREEN}$0${NC} [${YELLOW}OPCJE${NC}]"
@@ -1098,11 +1123,6 @@ main() {
                 echo -e " - Timeout: ${GREEN}45s${NC}"
                 echo -e " - Opóźnienie: ${GREEN}0.5s${NC} między żądaniami"
                 echo -e " - User-Agent: ${RED}Domyślny${NC}"
-                echo -e " ${YELLOW}--rl=${NC}${GREEN}HIGH${NC} Tryb wysokiego obciążenia:"
-                echo -e " - Wątki: ${GREEN}40${NC}"
-                echo -e " - Timeout: ${GREEN}30s${NC}"
-                echo -e " - Opóźnienie: ${GREEN}0s${NC}"
-                echo -e " - User-Agent: ${RED}Domyślny${NC}"
                 echo -e " ${YELLOW}--rl=${NC}${GREEN}<liczba>${NC} Ustawia niestandardową liczbę wątków (np. ${YELLOW}--rl=15${NC})."
                 echo -e " Pozostałe parametry (timeout, opóźnienie, UA) pozostają domyślne."
                 echo ""
@@ -1125,43 +1145,31 @@ main() {
                 echo -e "${YELLOW}Wskazówka:${NC} Po uruchomieniu skryptu, możesz interaktywnie zmieniać wybrane narzędzia i opcje."
                 exit 0
                 ;;
-            Q) QUIET_MODE=1 ;;
-            j) JSON_OUTPUT=1 ;;
-            o) OUTPUT_DIR="$OPTARG"
+            -Q) QUIET_MODE=1; shift ;;
+            -j) JSON_OUTPUT=1; shift ;;
+            -o) OUTPUT_DIR="$2"
                 mkdir -p "$OUTPUT_DIR" || { echo -e "${RED}Błąd: Nie można utworzyć katalogu wyjściowego: $OUTPUT_DIR${NC}" >&2; exit 1; }
-                ;;
-            \?)
-                echo -e "${RED}Nieprawidłowa opcja: -$OPTARG${NC}" >&2
-                echo "Użycie: $0 [-u URL] [-f PLIK] [-t WĄTKI] [-T TIMEOUT] [-Q] [-j] [-o KATALOG_WYJŚCIOWY] [--rl=TRYB|<liczba>] [--stealth]" >&2
-                exit 1
-                ;;
-        esac
-    done
-    shift $((OPTIND-1))
-
-    # Obsługa długich opcji po getopts
-    for arg in "$@"; do
-        case $arg in
-            --rl=*)
-                RATE_LIMIT_MODE=$(echo "${arg#*=}" | tr '[:lower:]' '[:upper:]')
+                shift 2 ;;
+            --rl)
+                RATE_LIMIT_MODE=$(echo "$2" | tr '[:lower:]' '[:upper:]')
                 if [[ "$RATE_LIMIT_MODE" =~ ^[0-9]+$ ]]; then
                     CUSTOM_RATE_LIMIT_THREADS="$RATE_LIMIT_MODE"
                     RATE_LIMIT_MODE="CUSTOM"
                 fi
-                shift # Przejdź do następnego argumentu
-                ;;
-            --stealth)
-                STEALTH_MODE=1
-                shift # Przejdź do następnego argumentu
+                shift 2 ;;
+            --stealth) STEALTH_MODE=1; shift ;;
+            --) # Koniec opcji
+                shift
+                break
                 ;;
             *)
-                # Jeśli są inne nieznane argumenty, wyświetl błąd
-                echo -e "${RED}Nieznany argument: $arg${NC}" >&2
+                echo -e "${RED}Błąd: Nieznany argument: $1${NC}" >&2
                 echo "Użycie: $0 [-u URL] [-f PLIK] [-t WĄTKI] [-T TIMEOUT] [-Q] [-j] [-o KATALOG_WYJŚCIOWY] [--rl=TRYB|<liczba>] [--stealth]" >&2
                 exit 1
                 ;;
         esac
     done
+    # --- KONIEC NOWEJ SEKCJI PARSOWANIA OPCJI ---
 
 
     # Ustaw początkowe opcje limitowania zapytań na podstawie trybu/ukrycia
