@@ -1,4 +1,6 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$'\n\t'
 
 # Kolory dla wyjścia konsoli
 GREEN='\033[0;32m'
@@ -35,12 +37,12 @@ TOOLS=(
 "Paramspider"
 "CRT.sh" # Nowe narzędzie
 "Nmap Scan" # Dodano Nmap
-"Nuclei Scan" # Nowe narzędzie
-"Gau Scan" # Nowe narzędzie
+# Nuclei Scan i Gau Scan będą teraz zawsze aktywne i nie będą w menu
 )
 
 # Domyślny wybór dla wszystkich kluczowych narzędzi do wyliczania subdomen
-SELECTED=(1 1 1 1 1 1 1 1 1 1 1 1) # Wszystkie wybrane domyślnie
+# Długość SELECTED musi odpowiadać nowej długości TOOLS
+SELECTED=(1 1 1 1 1 1 1 1 1 1) # Wszystkie wybrane domyślnie dla nowej listy TOOLS
 
 # Opcje Amass
 AMASS_PASSIVE=1
@@ -391,7 +393,7 @@ download_default_wordlist() {
 check_dependencies () {
     local missing=0
     # Dodano 'httpx', 'jq', 'curl', 'nmap', 'bc', 'nuclei', 'gau' do listy narzędzi do sprawdzenia
-    local tools=("ffuf" "gobuster" "subfinder" "amass" "httpx" "jq" "waybackurls" "katana" "hakrawler" "curl" "nmap" "bc" "nuclei" "gau")
+    local tools=(ffuf gobuster subfinder amass jq httpx waybackurls katana hakrawler paramspider curl nmap nuclei gau bc)
 
     echo -e "${BLUE}Sprawdzanie zależności...${NC}"
     for tool in "${tools[@]}"; do
@@ -533,6 +535,9 @@ show_menu() {
         if [ "$JSON_OUTPUT" -eq 1 ]; then
             echo -e " ${BLUE}Wyjście JSON: włączone${NC}"
         fi
+        echo -e " ${BLUE}Nuclei Scan: ${GREEN}Zawsze aktywny${NC}"
+        echo -e " ${BLUE}Gau Scan: ${GREEN}Zawsze aktywny${NC}"
+
 
         echo -e "Naciśnij 0-${#TOOLS[@]} aby przełączyć narzędzia, a/s/d dla opcji Amass, e/f dla opcji Nmap, p dla zakresu portów Nmap, q dla trybu cichego, ENTER aby rozpocząć"
         read -sn1 key
@@ -771,28 +776,30 @@ crawl_stage() {
                     output_file="$TMPDIR/paramspider_out.tmp"
                     pids_stage2+=($(run_tool "$tool_name" "$cmd_template" "$output_file"))
                     ;;
-                "Nuclei Scan")
-                    echo -e "${BLUE}[+] Nuclei Scan${NC}"
-                    output_file="$TMPDIR/nuclei_out.tmp"
-                    input_file="$TMPDIR/live_subdomains.tmp"
-                    if [ ! -s "$input_file" ]; then
-                        echo -e "${YELLOW}Brak live hostów do skanowania za pomocą Nuclei lub live_subdomains.tmp jest pusty. Pomijam Nuclei.${NC}"
-                        continue
-                    fi
-                    pids_stage2+=($(run_tool "$tool_name" "$cmd_template" "$output_file" "$input_file"))
-                    ;;
-                "Gau Scan")
-                    echo -e "${BLUE}[+] Gau Scan${NC}"
-                    output_file="$TMPDIR/gau_out.tmp"
-                    # Gau używa domeny bezpośrednio, nie pliku wejściowego
-                    pids_stage2+=($(run_tool "$tool_name" "$cmd_template" "$output_file"))
-                    ;;
                 *)
                     # Narzędzia nie będące częścią etapu crawlingu, lub już obsłużone
                     ;;
             esac
         fi
     done
+
+    # Uruchom Nuclei Scan (zawsze aktywny)
+    echo -e "${BLUE}[+] Nuclei Scan (zawsze aktywny)${NC}"
+    local nuclei_output_file="$TMPDIR/nuclei_out.tmp"
+    local nuclei_input_file="$TMPDIR/live_subdomains.tmp"
+    if [ -s "$nuclei_input_file" ]; then
+        pids_stage2+=($(run_tool "Nuclei Scan" "${TOOL_CMDS["Nuclei Scan"]}" "$nuclei_output_file" "$nuclei_input_file"))
+    else
+        echo -e "${YELLOW}Brak live hostów do skanowania za pomocą Nuclei. Pomijam Nuclei Scan.${NC}"
+        touch "$nuclei_output_file" # Upewnij się, że plik istnieje, nawet jeśli jest pusty
+    fi
+
+    # Uruchom Gau Scan (zawsze aktywny)
+    echo -e "${BLUE}[+] Gau Scan (zawsze aktywny)${NC}"
+    local gau_output_file="$TMPDIR/gau_out.tmp"
+    # Gau używa domeny bezpośrednio, nie pliku wejściowego
+    pids_stage2+=($(run_tool "Gau Scan" "${TOOL_CMDS["Gau Scan"]}" "$gau_output_file"))
+
 
     # Poczekaj, aż wszystkie procesy Etapu 2 zakończą się
     if [ ${#pids_stage2[@]} -gt 0 ]; then
@@ -995,7 +1002,7 @@ generate_json_report() {
 {
   "date": "$(date)",
   "target": "$domain_for_report",
-  "used_tools": [${selected_tools_json}],
+  "used_tools": [${selected_tools_json}, "Nuclei Scan", "Gau Scan"],
   "settings": {
     "rate_limit_mode": "$RATE_LIMIT_MODE",
     "threads": $THREADS,
@@ -1102,6 +1109,10 @@ main() {
                 echo -e " włącza opóźnienia i używa losowego User-Agenta."
                 echo -e " Jest to równoznaczne z użyciem ${YELLOW}--rl=LOW${NC}."
                 echo ""
+                echo -e "${BLUE}Narzędzia zawsze aktywne:${NC}"
+                echo -e " - ${GREEN}Nuclei Scan${NC} (skanowanie podatności)"
+                echo -e " - ${GREEN}Gau Scan${NC} (zbieranie URL-i)"
+                echo ""
                 echo -e "${BLUE}Przykłady użycia:${NC}"
                 echo -e " ${GREEN}$0 -u example.com${NC}"
                 echo -e " ${GREEN}$0 -f domains.txt -j -o my_scan_results --rl=LOW${NC}"
@@ -1199,13 +1210,15 @@ main() {
         echo -e "${BLUE}Vhosty ze statusem 200: ${GREEN}$(wc -l < "$OUTPUT_DIR/vhost_status_200.txt" 2>/dev/null || echo 0)${NC}"
     fi
     echo -e "${GREEN}Live hosty: $(wc -l < "$OUTPUT_DIR/live_subdomains.txt" 2>/dev/null || echo 0)${NC}"
-    if [ ${SELECTED[4]} -eq 1 ] || [ ${SELECTED[5]} -eq 1 ] || [ ${SELECTED[6]} -eq 1 ] || [ ${SELECTED[11]} -eq 1 ]; then # Dodano Gau
+    # Zaktualizowano indeksy SELECTED dla found_urls, ponieważ Nuclei i Gau są teraz zawsze aktywne
+    if [ -s "$OUTPUT_DIR/found_urls.txt" ]; then # Sprawdź, czy plik istnieje i nie jest pusty
         echo -e "${BLUE}Wszystkie znalezione URL-e (Waybackurls, Katana, Hakrawler, Gau): ${GREEN}$(wc -l < "$OUTPUT_DIR/found_urls.txt" 2>/dev/null || echo 0)${NC}"
     fi
-    if [ ${SELECTED[7]} -eq 1 ]; then
+    if [ ${SELECTED[7]} -eq 1 ]; then # Paramspider jest na indeksie 7
         echo -e "${BLUE}URL-e z parametrami (Paramspider): ${GREEN}$(wc -l < "$OUTPUT_DIR/urls_with_params.txt" 2>/dev/null || echo 0)${NC}"
     fi
-    if [ ${SELECTED[10]} -eq 1 ]; then # Nuclei
+    # Nuclei jest zawsze aktywne
+    if [ -s "$OUTPUT_DIR/nuclei_results.txt" ]; then
         echo -e "${BLUE}Wyniki Nuclei: ${GREEN}$(wc -l < "$OUTPUT_DIR/nuclei_results.txt" 2>/dev/null || echo 0)${NC}"
     fi
 
@@ -1220,6 +1233,8 @@ main() {
                 echo "- ${TOOLS[i]}"
             fi
         done
+        echo "- Nuclei Scan (zawsze aktywny)"
+        echo "- Gau Scan (zawsze aktywny)"
         echo "## Ustawienia skanowania"
         echo "- **Tryb limitowania zapytań**: $RATE_LIMIT_MODE"
         echo "- **Wątki**: $THREADS"
@@ -1242,7 +1257,7 @@ main() {
             echo "### Vhosty ze statusem 200"
             echo "Liczba: $(wc -l < "$OUTPUT_DIR/vhost_status_200.txt" 2>/dev/null || echo 0)"
         fi
-        if [ ${SELECTED[4]} -eq 1 ] || [ ${SELECTED[5]} -eq 1 ] || [ ${SELECTED[6]} -eq 1 ] || [ ${SELECTED[11]} -eq 1 ]; then # Dodano Gau
+        if [ -s "$OUTPUT_DIR/found_urls.txt" ]; then # Zaktualizowano warunek
             echo "### Wszystkie Znalezione URL-e"
             echo "Liczba: $(wc -l < "$OUTPUT_DIR/found_urls.txt" 2>/dev/null || echo 0)"
         fi
@@ -1250,12 +1265,10 @@ main() {
             echo "### URL-e z Parametrami"
             echo "Liczba: $(wc -l < "$OUTPUT_DIR/urls_with_params.txt" 2>/dev/null || echo 0)"
         fi
-        if [ ${SELECTED[10]} -eq 1 ]; then # Nuclei
-            echo "### Wyniki Nuclei"
-            echo "Liczba: $(wc -l < "$OUTPUT_DIR/nuclei_results.txt" 2>/dev/null || echo 0)"
-            if [ -s "$OUTPUT_DIR/nuclei_results.txt" ]; then
-                echo "Szczegółowe wyniki Nuclei można znaleźć w pliku: ${OUTPUT_DIR}/nuclei_results.txt"
-            fi
+        echo "### Wyniki Nuclei"
+        echo "Liczba: $(wc -l < "$OUTPUT_DIR/nuclei_results.txt" 2>/dev/null || echo 0)"
+        if [ -s "$OUTPUT_DIR/nuclei_results.txt" ]; then
+            echo "Szczegółowe wyniki Nuclei można znaleźć w pliku: ${OUTPUT_DIR}/nuclei_results.txt"
         fi
 
         # Znajdź indeks Nmap Scan dynamicznie
@@ -1291,15 +1304,13 @@ main() {
     if [ ${SELECTED[1]} -eq 1 ] && [ -s "$OUTPUT_DIR/vhost_status_200.txt" ]; then
         echo -e "• Vhosty: $OUTPUT_DIR/vhost_status_200.txt"
     fi
-    if [ ${SELECTED[4]} -eq 1 ] || [ ${SELECTED[5]} -eq 1 ] || [ ${SELECTED[6]} -eq 1 ] || [ ${SELECTED[11]} -eq 1 ]; then
-        echo -e "• Wszystkie znalezione URL-e: $OUTPUT_DIR/found_urls.txt"
+    if [ -s "$OUTPUT_DIR/found_urls.txt" ]; then # Zaktualizowano warunek
+        echo -e "• Wszystkie znalezione URL-e (Waybackurls, Katana, Hakrawler, Gau): $OUTPUT_DIR/found_urls.txt"
     fi
     if [ ${SELECTED[7]} -eq 1 ]; then
         echo -e "• URL-e z parametrami: $OUTPUT_DIR/urls_with_params.txt"
     fi
-    if [ ${SELECTED[10]} -eq 1 ]; then
-        echo -e "• Wyniki Nuclei: $OUTPUT_DIR/nuclei_results.txt"
-    fi
+    echo -e "• Wyniki Nuclei: $OUTPUT_DIR/nuclei_results.txt"
     if [ "$nmap_index" -ne -1 ] && [ ${SELECTED[$nmap_index]} -eq 1 ] && [ -f "$OUTPUT_DIR/${domain_part}_nmap.nmap" ]; then
         echo -e "• Wyniki Nmap: ${domain_part}_nmap.nmap, ${domain_part}_nmap.xml, ${domain_part}_nmap.gnmap"
     fi
