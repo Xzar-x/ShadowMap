@@ -7,6 +7,7 @@ GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 RED='\033[0;31m'
 YELLOW='\033[0;33m'
+BOLD='\033[1m' # Dodano pogrubienie
 NC='\033[0m' # Brak koloru reset do domyślnego
 
 # Domyślna konfiguracja
@@ -278,6 +279,25 @@ start_spinner() {
     ) &
     echo $! # Zwróć PID podpowłoki spinnera
 }
+
+# Funkcja do wyświetlania paska postępu na poziomie etapów
+display_stage_progress() {
+    local current_stage_num="$1"
+    local total_stages="$2"
+    local stage_name="$3"
+
+    local percentage=$(( (current_stage_num * 100) / total_stages ))
+    local progress_bar_length=30
+    local filled_length=$(( (percentage * progress_bar_length) / 100 ))
+    local empty_length=$(( progress_bar_length - filled_length ))
+
+    local filled_bar=$(printf "%${filled_length}s" | tr ' ' '#')
+    local empty_bar=$(printf "%${empty_length}s" | tr ' ' '-')
+
+    echo -e "\n${BLUE}Etap ${current_stage_num}/${total_stages}: ${stage_name}${NC}"
+    echo -e "${YELLOW}[${filled_bar}${empty_bar}] ${percentage}%${NC}"
+}
+
 
 # Funkcja do ustawiania opcji limitowania zapytań i User-Agenta
 set_rate_limit_options() {
@@ -602,6 +622,7 @@ clean_domain() {
 
 # Etap 1: Wyliczanie Subdomen
 recon_stage() {
+    display_stage_progress 1 3 "Wyliczanie Subdomen" # Pasek postępu dla etapu
     echo -e "${BLUE}Rozpoczynanie Etapu 1: Wyliczanie Subdomen dla ${GREEN}$domain${NC}"
     local pids_stage1=() # PIDy dla narzędzi do wyliczania subdomen
 
@@ -704,6 +725,7 @@ recon_stage() {
 
 # Nowy etap: Skanowanie portów za pomocą httpx przed Nmapem
 pre_scan_httpx_ports() {
+    display_stage_progress 2 3 "Wstępne skanowanie portów (httpx)" # Pasek postępu dla etapu
     echo -e "\n${BLUE}Rozpoczynanie wstępnego skanowania portów za pomocą httpx dla ${GREEN}$domain${NC}"
     local pids_httpx_ports=()
 
@@ -740,6 +762,7 @@ pre_scan_httpx_ports() {
 
 # Etap 2: Crawling i Odkrywanie Parametrów
 crawl_stage() {
+    display_stage_progress 3 3 "Crawling i Odkrywanie Parametrów" # Pasek postępu dla etapu
     echo -e "\n${BLUE}Rozpoczynanie Etapu 2: Crawling i Odkrywanie Parametrów dla ${GREEN}$domain${NC}"
     local pids_stage2=() # PIDy dla narzędzi do crawlingu/odkrywania parametrów
 
@@ -816,6 +839,8 @@ crawl_stage() {
 
 # Etap 3: Skanowanie Portów (Nmap)
 port_scan_stage() {
+    # Nmap ma własny pasek postępu, więc nie używamy display_stage_progress tutaj,
+    # ale możemy wyświetlić ogólny komunikat o rozpoczęciu.
     echo -e "\n${BLUE}Rozpoczynanie Etapu 3: Skanowanie Portów (Nmap) dla ${GREEN}$domain${NC}"
     local pids_stage3=() # PIDy dla Nmap
 
@@ -866,8 +891,31 @@ port_scan_stage() {
             fi
 
             # Użyj -iL dla pliku wejściowego, -oA dla wszystkich formatów wyjścia
+            # Przekieruj stderr Nmapa do potoku, aby odczytać postęp
             local nmap_full_cmd="nmap -iL \"\$TMPDIR/live_subdomains.tmp\" \$nmap_timing_template \$nmap_cmd_options -oA \"\$OUTPUT_DIR/${domain_part}_nmap\" $nmap_delay_opt"
-            pids_stage3+=($(run_tool "Nmap Scan" "$nmap_full_cmd"))
+            
+            # Uruchom Nmap w tle i monitoruj jego wyjście
+            (
+                # Nmap wypisuje postęp na stderr
+                eval "$nmap_full_cmd" 2>&1 | while IFS= read -r line; do
+                    # Przechwyć procent ukończenia z linii Nmapa
+                    if [[ "$line" =~ ([0-9]+)\% ]]; then
+                        local percent="${BASH_REMATCH[1]}"
+                        # Wyświetl pasek postępu Nmap
+                        local bar_length=50
+                        local filled_len=$(( (percent * bar_length) / 100 ))
+                        local empty_len=$(( bar_length - filled_len ))
+                        local filled_bar=$(printf "%${filled_len}s" | tr ' ' '=')
+                        local empty_bar=$(printf "%${empty_len}s" | tr ' ' '-')
+                        echo -ne "\r${BLUE}Skanowanie Nmap: [${filled_bar}${empty_bar}] ${percent}%${NC}"
+                    fi
+                    # Przekieruj pełne wyjście Nmapa do logu błędów, jeśli nie jest cichy
+                    if [ "$QUIET_MODE" -ne 1 ]; then
+                        echo "$line" >> "$ERROR_LOG" # Zapisz pełne wyjście Nmapa
+                    fi
+                done
+            ) &
+            pids_stage3+=($!) # Dodaj PID podpowłoki monitorującej Nmapa
         else
             echo -e "${YELLOW}Brak live hostów do skanowania za pomocą Nmapa lub live_subdomains.tmp jest pusty. Pomijam Nmap Scan.${NC}"
         fi
@@ -875,15 +923,14 @@ port_scan_stage() {
 
     # Poczekaj, aż procesy Nmap zakończą się
     if [ ${#pids_stage3[@]} -gt 0 ]; then
-        spinner_pid=$(start_spinner "Etap 3: Skanowanie Portów (Nmap)" "${pids_stage3[@]}")
+        # Nie używamy spinnera, bo Nmap ma swój własny postęp
         for pid in "${pids_stage3[@]}"; do
             if ! wait "$pid"; then
                 echo "${RED}Error in Nmap Scan with PID $pid.${NC}" >> "$ERROR_LOG"
             fi
         done
-        kill "$spinner_pid" 2>/dev/null
     fi
-    echo -ne "\r${GREEN}✓ Skanowanie portów zakończono!${NC}\n"
+    echo -ne "\r${GREEN}✓ Skanowanie portów zakończono!${NC}\n" # Nowa linia po zakończeniu paska Nmap
 }
 
 # Główna funkcja skanowania domeny
