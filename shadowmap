@@ -7,7 +7,7 @@ GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 RED='\033[0;31m'
 YELLOW='\033[0;33m'
-NC='\033[0m' # Brak koloru reset do domyślnego
+NC='\\033[0m' # Brak koloru reset do domyślnego
 
 # Domyślna konfiguracja
 URL=""
@@ -135,7 +135,7 @@ strip_ansi_codes() {
 # ASCII Art
 print_title() {
     clear
-    cat <<\EOF
+    cat <<\\EOF
    _____ __              __              __  ___          
   / ___// /_  ____ _____/ /___ _      __/  |/  /___ _____ 
   \__ \/ __ \/ __ `/ __  / __ \ | /| / / /|_/ / __ `/ __ \
@@ -194,7 +194,9 @@ run_tool() {
     local tool_name="$1"
     local cmd_template="$2" # To jest teraz pełny szablon komendy z TOOL_CMDS
     local output_file="$3" # Opcjonalnie: plik do przekierowania stdout
-    local input_file="$4" # Opcjonalnie: plik wejściowy dla narzędzi (np. Katana, Hakrawler)
+    local input_file="${4:-}" # Opcjonalnie: plik wejściowy dla narzędzi (np. Katana, Hakrawler)
+                               # Użycie ${4:-} sprawia, że zmienna będzie pusta, jeśli argument nie zostanie przekazany,
+                               # zamiast być niezdefiniowaną, co zapobiega błędowi "unbound variable".
 
     # Rozwiń zmienne w szablonie komendy
     local expanded_cmd_str=$(expand_vars "$cmd_template")
@@ -548,7 +550,7 @@ show_menu() {
         echo -e " ${BLUE}Gau Scan: ${GREEN}Zawsze aktywny${NC}"
 
 
-        echo -e "Naciśnij 0-${#TOOLS[@]} aby przełączyć narzędzia, a/s/d dla opcji Amass, e/f dla opcji Nmap, p dla zakresu portów Nmap, q dla trybu cichego, ENTER aby rozpocząć"
+        echo -e "Naciśnij 0-${#TOOLS[@]} aby przełączyć narzędzia, a/s/d dla opcji Amass, e/f dla opcji Nmap, p dla zakresu portów Nmap, q dla trybu cichego, ENTER aby kontynuować"
         read -sn1 key
         [[ -z "$key" ]] && break
 
